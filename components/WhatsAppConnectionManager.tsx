@@ -48,7 +48,7 @@ export function WhatsAppConnectionManager() {
         setQrCodeImgUrl(data.qr_code_url);
       }
     } catch {
-      setQrCodeImgUrl(`https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=1@WhatsAppCRM:${Date.now()}`);
+      setQrCodeImgUrl(`https://api.qrserver.com/v1/create-qr-code/?size=280x280&data=${encodeURIComponent('https://crm-adp.netlify.app/settings/whatsapp')}`);
     } finally {
       setIsRefreshingQr(false);
     }
