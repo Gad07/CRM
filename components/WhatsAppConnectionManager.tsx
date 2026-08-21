@@ -64,9 +64,14 @@ export function WhatsAppConnectionManager() {
       const savedPhoneId = localStorage.getItem('WA_PHONE_NUMBER_ID');
       const savedToken = localStorage.getItem('WA_ACCESS_TOKEN');
       const savedOwnPhone = localStorage.getItem('USER_WA_PHONE');
+      const savedConnected = localStorage.getItem('WA_IS_CONNECTED');
+
       if (savedPhoneId) setPhoneNumberId(savedPhoneId);
       if (savedToken) setAccessToken(savedToken);
       if (savedOwnPhone) setUserOwnPhone(savedOwnPhone);
+      if (savedConnected === 'true' || savedPhoneId) {
+        setIsQrPaired(true);
+      }
     }
   }, []);
 
@@ -86,7 +91,20 @@ export function WhatsAppConnectionManager() {
     setTimeout(() => {
       setIsQrPaired(true);
       setIsRefreshingQr(false);
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('WA_IS_CONNECTED', 'true');
+        if (userOwnPhone) {
+          localStorage.setItem('USER_WA_PHONE', userOwnPhone);
+        }
+      }
     }, 1200);
+  };
+
+  const handleDisconnect = () => {
+    setIsQrPaired(false);
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem('WA_IS_CONNECTED');
+    }
   };
 
   const handleSaveConfig = (e: React.FormEvent) => {
@@ -94,7 +112,9 @@ export function WhatsAppConnectionManager() {
     if (typeof window !== 'undefined') {
       localStorage.setItem('WA_PHONE_NUMBER_ID', phoneNumberId);
       localStorage.setItem('WA_ACCESS_TOKEN', accessToken);
+      localStorage.setItem('WA_IS_CONNECTED', 'true');
     }
+    setIsQrPaired(true);
     setIsSaved(true);
     setTimeout(() => setIsSaved(false), 3000);
   };
@@ -266,7 +286,7 @@ export function WhatsAppConnectionManager() {
                 </span>
                 {isQrPaired ? (
                   <button
-                    onClick={() => setIsQrPaired(false)}
+                    onClick={handleDisconnect}
                     className="text-xs text-red-600 underline font-extrabold cursor-pointer"
                   >
                     Desconectar
