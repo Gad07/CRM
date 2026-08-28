@@ -5,7 +5,10 @@ import {
   MessageSquare, Search, Send, Sparkles, CheckCheck, AlertTriangle,
   Star, ShieldCheck, Users, Phone, Plus, Loader2, WifiOff, RefreshCw, Radio,
   QrCode, Smartphone, CheckCircle2, X, Zap, Image as ImageIcon, FileText,
-  Mic, MapPin, Download, ExternalLink, Play
+  Mic, MapPin, Download, ExternalLink, Play,
+  Tag, StickyNote, ClipboardList, CheckSquare, Square, Trash2,
+  PlusCircle, ChevronRight, ChevronLeft, TrendingUp, Clock, UserCheck,
+  Briefcase, Calendar, Lightbulb, Flame
 } from "lucide-react";
 import { useCRM } from "@/context/CRMContext";
 import { Navbar } from "@/components/Navbar";
@@ -31,6 +34,76 @@ interface ChatMessage {
     name?: string;
     isVoiceNote?: boolean;
   } | null;
+}
+
+type DealStage = "prospecto" | "interesado" | "cotizacion" | "cerrado" | "perdido";
+type ContactTag = "vip" | "cliente" | "prospecto" | "frio" | "urgente";
+
+interface CrmNote {
+  id: string;
+  text: string;
+  createdAt: string;
+}
+
+interface CrmTask {
+  id: string;
+  text: string;
+  dueDate: string;
+  done: boolean;
+}
+
+interface CrmContactData {
+  stage: DealStage;
+  tags: ContactTag[];
+  notes: CrmNote[];
+  tasks: CrmTask[];
+  quickNote: string;
+}
+
+const STAGE_LABELS: Record<DealStage, string> = {
+  prospecto: "Prospecto",
+  interesado: "Interesado",
+  cotizacion: "Cotización",
+  cerrado: "Cerrado ✅",
+  perdido: "Perdido ❌",
+};
+
+const STAGE_COLORS: Record<DealStage, string> = {
+  prospecto: "bg-slate-100 text-slate-700 border-slate-300",
+  interesado: "bg-blue-100 text-blue-800 border-blue-300",
+  cotizacion: "bg-amber-100 text-amber-800 border-amber-300",
+  cerrado: "bg-emerald-100 text-emerald-800 border-emerald-300",
+  perdido: "bg-red-100 text-red-800 border-red-300",
+};
+
+const TAG_LABELS: Record<ContactTag, string> = {
+  vip: "⭐ VIP",
+  cliente: "💼 Cliente",
+  prospecto: "🔍 Prospecto",
+  frio: "❄️ Frío",
+  urgente: "🔥 Urgente",
+};
+
+const TAG_COLORS: Record<ContactTag, string> = {
+  vip: "bg-yellow-100 text-yellow-800 border-yellow-300",
+  cliente: "bg-indigo-100 text-indigo-800 border-indigo-300",
+  prospecto: "bg-slate-100 text-slate-700 border-slate-300",
+  frio: "bg-cyan-100 text-cyan-800 border-cyan-300",
+  urgente: "bg-red-100 text-red-800 border-red-300",
+};
+
+function loadCrmData(jid: string): CrmContactData {
+  if (typeof window === "undefined") return { stage: "prospecto", tags: [], notes: [], tasks: [], quickNote: "" };
+  try {
+    const raw = localStorage.getItem(`CRM_PANEL_${jid}`);
+    if (raw) return JSON.parse(raw);
+  } catch {}
+  return { stage: "prospecto", tags: [], notes: [], tasks: [], quickNote: "" };
+}
+
+function saveCrmData(jid: string, data: CrmContactData) {
+  if (typeof window === "undefined") return;
+  try { localStorage.setItem(`CRM_PANEL_${jid}`, JSON.stringify(data)); } catch {}
 }
 
 interface WhatsAppThread {
@@ -212,6 +285,289 @@ const WA_KEYS = {
   TWILIO_TOKEN: "WA_TWILIO_TOKEN", TWILIO_FROM: "WA_TWILIO_FROM",
 };
 
+// ──────────────────────────────────────────────────────────────
+// CRM Side Panel Component
+// ──────────────────────────────────────────────────────────────
+function CrmSidePanel({
+  thread,
+  data,
+  onChange,
+  aiSummary,
+  isLoadingAi,
+  onRequestAiSummary,
+}: {
+  thread: WhatsAppThread;
+  data: CrmContactData;
+  onChange: (d: CrmContactData) => void;
+  aiSummary: string | null;
+  isLoadingAi: boolean;
+  onRequestAiSummary: () => void;
+}) {
+  const [noteInput, setNoteInput] = useState("");
+  const [taskInput, setTaskInput] = useState("");
+  const [taskDate, setTaskDate] = useState("");
+  const [activeTab, setActiveTab] = useState<"perfil" | "notas" | "tareas" | "ia">("perfil");
+
+  const parsedAi = aiSummary ? (() => { try { return JSON.parse(aiSummary); } catch { return null; } })() : null;
+
+  const addNote = () => {
+    if (!noteInput.trim()) return;
+    const note: CrmNote = { id: Date.now().toString(), text: noteInput.trim(), createdAt: new Date().toLocaleString("es-GT") };
+    onChange({ ...data, notes: [note, ...data.notes] });
+    setNoteInput("");
+  };
+
+  const deleteNote = (id: string) => onChange({ ...data, notes: data.notes.filter(n => n.id !== id) });
+
+  const addTask = () => {
+    if (!taskInput.trim()) return;
+    const task: CrmTask = { id: Date.now().toString(), text: taskInput.trim(), dueDate: taskDate, done: false };
+    onChange({ ...data, tasks: [task, ...data.tasks] });
+    setTaskInput("");
+    setTaskDate("");
+  };
+
+  const toggleTask = (id: string) => onChange({ ...data, tasks: data.tasks.map(t => t.id === id ? { ...t, done: !t.done } : t) });
+  const deleteTask = (id: string) => onChange({ ...data, tasks: data.tasks.filter(t => t.id !== id) });
+
+  const toggleTag = (tag: ContactTag) => {
+    const has = data.tags.includes(tag);
+    onChange({ ...data, tags: has ? data.tags.filter(t => t !== tag) : [...data.tags, tag] });
+  };
+
+  const TABS = [
+    { key: "perfil" as const, label: "Perfil", icon: UserCheck },
+    { key: "notas" as const, label: "Notas", icon: StickyNote },
+    { key: "tareas" as const, label: "Tareas", icon: CheckSquare },
+    { key: "ia" as const, label: "IA", icon: Lightbulb },
+  ];
+
+  return (
+    <div className="border-l border-slate-200 flex flex-col bg-white h-full min-h-0 overflow-hidden">
+      {/* Header */}
+      <div className="p-3 border-b border-slate-200 bg-violet-50 shrink-0">
+        <div className="flex items-center gap-2">
+          <div className="w-8 h-8 rounded-full bg-violet-600 text-white flex items-center justify-center shrink-0">
+            <Briefcase className="w-4 h-4" />
+          </div>
+          <div className="min-w-0">
+            <p className="text-[11px] font-extrabold text-violet-900 truncate">{thread.contact_name}</p>
+            <p className="text-[10px] text-violet-600 font-medium truncate">{thread.phone}</p>
+          </div>
+        </div>
+        {/* Stage selector */}
+        <div className="mt-2.5">
+          <select
+            value={data.stage}
+            onChange={e => onChange({ ...data, stage: e.target.value as DealStage })}
+            className={`w-full text-[11px] font-extrabold border rounded-lg px-2 py-1 focus:outline-none cursor-pointer ${STAGE_COLORS[data.stage]}`}
+          >
+            {(Object.keys(STAGE_LABELS) as DealStage[]).map(s => (
+              <option key={s} value={s}>{STAGE_LABELS[s]}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      {/* Tabs */}
+      <div className="flex border-b border-slate-200 shrink-0">
+        {TABS.map(tab => {
+          const Icon = tab.icon;
+          return (
+            <button
+              key={tab.key}
+              onClick={() => setActiveTab(tab.key)}
+              className={`flex-1 flex flex-col items-center gap-0.5 py-2 text-[9px] font-extrabold transition-colors cursor-pointer ${
+                activeTab === tab.key
+                  ? "text-violet-700 border-b-2 border-violet-600 bg-violet-50"
+                  : "text-slate-500 hover:text-slate-700 hover:bg-slate-50"
+              }`}
+            >
+              <Icon className="w-3.5 h-3.5" />
+              {tab.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Tab Content */}
+      <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-3">
+
+        {/* PERFIL TAB */}
+        {activeTab === "perfil" && (
+          <div className="space-y-3">
+            {/* Tags */}
+            <div>
+              <p className="text-[10px] font-extrabold text-slate-500 uppercase tracking-wider mb-1.5 flex items-center gap-1"><Tag className="w-3 h-3" />Etiquetas</p>
+              <div className="flex flex-wrap gap-1">
+                {(Object.keys(TAG_LABELS) as ContactTag[]).map(tag => {
+                  const active = data.tags.includes(tag);
+                  return (
+                    <button
+                      key={tag}
+                      onClick={() => toggleTag(tag)}
+                      className={`text-[10px] font-bold px-2 py-0.5 rounded-full border transition-all cursor-pointer ${
+                        active ? TAG_COLORS[tag] + " ring-1 ring-offset-1 ring-current" : "bg-slate-50 text-slate-400 border-slate-200 hover:bg-slate-100"
+                      }`}
+                    >
+                      {TAG_LABELS[tag]}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Quick Note */}
+            <div>
+              <p className="text-[10px] font-extrabold text-slate-500 uppercase tracking-wider mb-1.5 flex items-center gap-1"><StickyNote className="w-3 h-3" />Nota rápida</p>
+              <textarea
+                value={data.quickNote}
+                onChange={e => onChange({ ...data, quickNote: e.target.value })}
+                placeholder="Escribe algo sobre este contacto..."
+                rows={4}
+                className="w-full text-[11px] bg-amber-50 border border-amber-200 text-slate-800 rounded-xl px-2.5 py-2 resize-none focus:outline-none focus:ring-2 focus:ring-amber-400 placeholder:text-slate-400 font-medium"
+              />
+              <p className="text-[9px] text-slate-400 mt-0.5">Se guarda automáticamente</p>
+            </div>
+
+            {/* Contact info */}
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-2.5 space-y-1.5">
+              <p className="text-[10px] font-extrabold text-slate-500 uppercase tracking-wider flex items-center gap-1"><UserCheck className="w-3 h-3" />Info</p>
+              <div className="space-y-1 text-[11px]">
+                <div className="flex items-center gap-1.5"><Phone className="w-3 h-3 text-slate-400" /><span className="font-medium text-slate-700">{thread.phone}</span></div>
+                <div className="flex items-center gap-1.5"><Briefcase className="w-3 h-3 text-slate-400" /><span className="font-medium text-slate-700 truncate">{thread.company_name}</span></div>
+                {thread.deal_title && <div className="flex items-center gap-1.5"><TrendingUp className="w-3 h-3 text-slate-400" /><span className="font-medium text-slate-700 truncate">{thread.deal_title}</span></div>}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* NOTAS TAB */}
+        {activeTab === "notas" && (
+          <div className="space-y-2.5">
+            <div className="flex gap-1.5">
+              <textarea
+                value={noteInput}
+                onChange={e => setNoteInput(e.target.value)}
+                placeholder="Escribe una nota..."
+                rows={2}
+                className="flex-1 text-[11px] bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 resize-none focus:outline-none focus:ring-2 focus:ring-violet-500 font-medium"
+              />
+              <button onClick={addNote} className="p-2 bg-violet-600 hover:bg-violet-700 text-white rounded-xl transition-colors cursor-pointer shrink-0 self-start mt-0.5">
+                <PlusCircle className="w-4 h-4" />
+              </button>
+            </div>
+            {data.notes.length === 0 ? (
+              <p className="text-[11px] text-slate-400 text-center py-4">Sin notas aún.</p>
+            ) : (
+              <div className="space-y-2">
+                {data.notes.map(note => (
+                  <div key={note.id} className="bg-amber-50 border border-amber-200 rounded-xl p-2.5 group relative">
+                    <p className="text-[11px] text-slate-800 font-medium leading-relaxed whitespace-pre-wrap pr-5">{note.text}</p>
+                    <p className="text-[9px] text-slate-400 mt-1 flex items-center gap-1"><Clock className="w-2.5 h-2.5" />{note.createdAt}</p>
+                    <button onClick={() => deleteNote(note.id)} className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-600 transition-all cursor-pointer">
+                      <Trash2 className="w-3 h-3" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* TAREAS TAB */}
+        {activeTab === "tareas" && (
+          <div className="space-y-2.5">
+            <div className="space-y-1.5">
+              <input
+                value={taskInput}
+                onChange={e => setTaskInput(e.target.value)}
+                placeholder="Nueva tarea o seguimiento..."
+                className="w-full text-[11px] bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-violet-500 font-medium"
+              />
+              <div className="flex gap-1.5">
+                <input
+                  type="date"
+                  value={taskDate}
+                  onChange={e => setTaskDate(e.target.value)}
+                  className="flex-1 text-[11px] bg-slate-50 border border-slate-200 rounded-xl px-2 py-1 focus:outline-none focus:ring-2 focus:ring-violet-500 font-medium"
+                />
+                <button onClick={addTask} className="flex items-center gap-1 bg-violet-600 hover:bg-violet-700 text-white text-[11px] font-bold px-3 py-1 rounded-xl cursor-pointer transition-colors">
+                  <PlusCircle className="w-3 h-3" /> Agregar
+                </button>
+              </div>
+            </div>
+
+            {data.tasks.length === 0 ? (
+              <p className="text-[11px] text-slate-400 text-center py-4">Sin tareas aún.</p>
+            ) : (
+              <div className="space-y-1.5">
+                {data.tasks.map(task => (
+                  <div key={task.id} className={`flex items-start gap-2 p-2 rounded-xl border group ${task.done ? "bg-slate-50 border-slate-100 opacity-60" : "bg-white border-slate-200"}`}>
+                    <button onClick={() => toggleTask(task.id)} className="shrink-0 mt-0.5 cursor-pointer text-violet-600 hover:text-violet-800 transition-colors">
+                      {task.done ? <CheckSquare className="w-4 h-4" /> : <Square className="w-4 h-4" />}
+                    </button>
+                    <div className="flex-1 min-w-0">
+                      <p className={`text-[11px] font-medium leading-relaxed ${task.done ? "line-through text-slate-400" : "text-slate-800"}`}>{task.text}</p>
+                      {task.dueDate && (
+                        <p className="text-[9px] text-slate-500 flex items-center gap-1 mt-0.5">
+                          <Calendar className="w-2.5 h-2.5" />
+                          {new Date(task.dueDate + "T12:00:00").toLocaleDateString("es-GT", { day: "numeric", month: "short" })}
+                        </p>
+                      )}
+                    </div>
+                    <button onClick={() => deleteTask(task.id)} className="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-600 transition-all cursor-pointer shrink-0">
+                      <Trash2 className="w-3 h-3" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* IA TAB */}
+        {activeTab === "ia" && (
+          <div className="space-y-3">
+            <button
+              onClick={onRequestAiSummary}
+              disabled={isLoadingAi}
+              className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-700 hover:to-indigo-700 disabled:opacity-60 text-white font-bold text-[11px] px-4 py-2.5 rounded-xl cursor-pointer transition-all shadow-sm"
+            >
+              {isLoadingAi ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+              {isLoadingAi ? "Analizando con Gemini..." : "Resumir conversación con IA"}
+            </button>
+
+            {parsedAi ? (
+              <div className="space-y-2.5">
+                <div className="bg-blue-50 border border-blue-200 rounded-xl p-2.5">
+                  <p className="text-[10px] font-extrabold text-blue-700 uppercase tracking-wider mb-1 flex items-center gap-1"><TrendingUp className="w-3 h-3" />Interés principal</p>
+                  <p className="text-[11px] text-blue-900 font-medium">{parsedAi.interes}</p>
+                </div>
+                <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-2.5">
+                  <p className="text-[10px] font-extrabold text-emerald-700 uppercase tracking-wider mb-1 flex items-center gap-1"><ChevronRight className="w-3 h-3" />Siguiente acción</p>
+                  <p className="text-[11px] text-emerald-900 font-medium">{parsedAi.siguiente_accion}</p>
+                </div>
+                <div className={`border rounded-xl p-2.5 ${parsedAi.urgencia === "Alta" ? "bg-red-50 border-red-200" : parsedAi.urgencia === "Media" ? "bg-amber-50 border-amber-200" : "bg-slate-50 border-slate-200"}`}>
+                  <p className={`text-[10px] font-extrabold uppercase tracking-wider mb-1 flex items-center gap-1 ${parsedAi.urgencia === "Alta" ? "text-red-700" : parsedAi.urgencia === "Media" ? "text-amber-700" : "text-slate-500"}`}>
+                    <Flame className="w-3 h-3" />Urgencia: {parsedAi.urgencia}
+                  </p>
+                  <p className="text-[11px] font-medium text-slate-700">{parsedAi.resumen}</p>
+                </div>
+              </div>
+            ) : !isLoadingAi ? (
+              <div className="text-center py-6 space-y-2">
+                <Sparkles className="w-8 h-8 text-slate-200 mx-auto" />
+                <p className="text-[11px] text-slate-400 font-medium">Presiona el botón para que Gemini analice esta conversación</p>
+              </div>
+            ) : null}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function WhatsAppInboxPage() {
   const { data, templates, renderTemplateText, formatCurrency } = useCRM();
   const [threads, setThreads] = useState<WhatsAppThread[]>([]);
@@ -238,6 +594,12 @@ export default function WhatsAppInboxPage() {
   const [isNewChatModalOpen, setIsNewChatModalOpen] = useState(false);
   const [newChatPhone, setNewChatPhone] = useState("");
   const [newChatName, setNewChatName] = useState("");
+
+  // CRM Panel state
+  const [isCrmPanelOpen, setIsCrmPanelOpen] = useState(false);
+  const [crmData, setCrmData] = useState<CrmContactData>({ stage: "prospecto", tags: [], notes: [], tasks: [], quickNote: "" });
+  const [crmAiSummary, setCrmAiSummary] = useState<string | null>(null);
+  const [isCrmAiLoading, setIsCrmAiLoading] = useState(false);
 
   const handleStartNewChat = (e: React.FormEvent) => {
     e.preventDefault();
@@ -372,7 +734,40 @@ export default function WhatsAppInboxPage() {
 
   const activeThread = threads.find((t) => t.id === activeThreadId) || threads[0] || null;
 
-  // QR Modal & Baileys real connection state
+  // Load CRM data whenever active thread changes
+  useEffect(() => {
+    if (activeThread?.id) {
+      setCrmData(loadCrmData(activeThread.id));
+      setCrmAiSummary(null);
+    }
+  }, [activeThread?.id]);
+
+  const handleCrmAiSummary = useCallback(async () => {
+    if (!activeThread) return;
+    setIsCrmAiLoading(true);
+    setCrmAiSummary(null);
+    try {
+      const msgs = activeThread.messages.slice(-30).map((m) => `${m.sender === "agent" ? "Agente" : activeThread.contact_name}: ${m.text}`).join("\n");
+      const res = await fetch("/api/ai/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prompt: `Eres un CRM experto. Analiza esta conversación de WhatsApp y responde SOLO en este formato JSON exacto sin markdown:\n{"interes":"...","siguiente_accion":"...","urgencia":"Alta|Media|Baja","resumen":"máx 2 oraciones"}\n\nConversación:\n${msgs}`,
+        }),
+      });
+      const data = await res.json();
+      const text = data.text || data.content || "";
+      const cleaned = text.replace(/```json|```/g, "").trim();
+      const parsed = JSON.parse(cleaned);
+      setCrmAiSummary(JSON.stringify(parsed));
+    } catch {
+      setCrmAiSummary(JSON.stringify({ interes: "No disponible", siguiente_accion: "Revisar conversación manualmente", urgencia: "Media", resumen: "No se pudo analizar la conversación." }));
+    } finally {
+      setIsCrmAiLoading(false);
+    }
+  }, [activeThread]);
+
+
   const [isQrModalOpen, setIsQrModalOpen] = useState(false);
   const [baileysState, setBaileysState] = useState<{
     connected: boolean;
@@ -573,9 +968,9 @@ export default function WhatsAppInboxPage() {
         </div>
 
         {/* Main layout */}
-        <div className="bg-white border border-slate-200 rounded-2xl shadow-sm flex-1 min-h-0 grid grid-cols-1 md:grid-cols-12 overflow-hidden">
+        <div className={`bg-white border border-slate-200 rounded-2xl shadow-sm flex-1 min-h-0 grid grid-cols-1 overflow-hidden transition-all duration-300 ${isCrmPanelOpen && activeThread ? "md:grid-cols-[3fr_5fr_2fr]" : "md:grid-cols-[4fr_8fr]"}`}>
           {/* Thread list */}
-          <div className="md:col-span-4 border-r border-slate-200 flex flex-col bg-slate-50 h-full min-h-0 overflow-hidden">
+          <div className="border-r border-slate-200 flex flex-col bg-slate-50 h-full min-h-0 overflow-hidden">
             <div className="p-3 border-b border-slate-200 bg-white shrink-0">
               <div className="flex items-center justify-between mb-2">
                 <h2 className="text-xs font-extrabold text-slate-900 flex items-center gap-1.5"><MessageSquare className="w-4 h-4 text-emerald-600" />Conversaciones ({filteredThreads.length})</h2>
@@ -636,7 +1031,7 @@ export default function WhatsAppInboxPage() {
 
           {/* Active thread */}
           {activeThread ? (
-            <div className="md:col-span-8 flex flex-col bg-white h-full min-h-0 overflow-hidden">
+            <div className="flex flex-col bg-white h-full min-h-0 overflow-hidden">
               <div className="p-3.5 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3 bg-slate-50 shrink-0">
                 <div className="flex items-center gap-3">
                   <div className="w-10 h-10 rounded-full bg-slate-900 text-white font-extrabold text-xs flex items-center justify-center shadow-xs">{getInitials(activeThread.contact_name)}</div>
@@ -651,6 +1046,18 @@ export default function WhatsAppInboxPage() {
                 <div className="flex items-center gap-2">
                   <span className="bg-slate-100 text-slate-700 border border-slate-200 font-bold px-2.5 py-1 rounded-xl text-xs">{formatCurrency(activeThread.deal_value)}</span>
                   <button onClick={handleAuditChatQuality} className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs px-3.5 py-1.5 rounded-xl shadow-xs transition-all cursor-pointer"><ShieldCheck className="w-4 h-4" /><span className="hidden sm:inline">Auditar con IA</span></button>
+                  <button
+                    onClick={() => setIsCrmPanelOpen(v => !v)}
+                    title="Panel CRM"
+                    className={`flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-xl border transition-all cursor-pointer ${
+                      isCrmPanelOpen
+                        ? "bg-violet-600 text-white border-violet-700 shadow-xs"
+                        : "bg-slate-100 text-slate-700 border-slate-200 hover:bg-violet-50 hover:text-violet-700 hover:border-violet-200"
+                    }`}
+                  >
+                    <ClipboardList className="w-4 h-4" />
+                    <span className="hidden sm:inline">{isCrmPanelOpen ? "Cerrar CRM" : "Ver CRM"}</span>
+                  </button>
                 </div>
               </div>
 
@@ -792,9 +1199,24 @@ export default function WhatsAppInboxPage() {
               </div>
             </div>
           ) : (
-            <div className="md:col-span-8 flex items-center justify-center bg-slate-50">
+            <div className="flex items-center justify-center bg-slate-50">
               <div className="text-center space-y-2"><MessageSquare className="w-10 h-10 text-slate-300 mx-auto" /><p className="text-sm text-slate-500 font-medium">Selecciona una conversación</p></div>
             </div>
+          )}
+
+          {/* CRM Panel */}
+          {isCrmPanelOpen && activeThread && (
+            <CrmSidePanel
+              thread={activeThread}
+              data={crmData}
+              onChange={(updated) => {
+                setCrmData(updated);
+                saveCrmData(activeThread.id, updated);
+              }}
+              aiSummary={crmAiSummary}
+              isLoadingAi={isCrmAiLoading}
+              onRequestAiSummary={handleCrmAiSummary}
+            />
           )}
         </div>
       </main>
