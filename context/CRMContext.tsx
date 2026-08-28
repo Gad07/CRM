@@ -32,6 +32,7 @@ import { defaultProducts, defaultAutomationRules, defaultInvoices, defaultSalesR
 import { defaultTemplates, defaultBotSequences } from '@/lib/templates-and-bots-defaults';
 import { processAutomations } from '@/lib/automation-engine';
 import { calculateLeadScore } from '@/lib/lead-scoring';
+import { supabase } from '@/lib/supabase';
 
 const LOCAL_STORAGE_KEY = 'crm_adaptable_data_v1';
 const ENTERPRISE_STORAGE_KEY = 'crm_enterprise_data_v1';
@@ -57,6 +58,7 @@ interface CRMContextType {
   addContact: (contact: Omit<Contact, 'id' | 'created_at'>) => void;
   updateContact: (contact: Contact) => void;
   deleteContact: (id: string) => void;
+  clearAllContacts: () => void;
   addCompany: (company: Omit<Company, 'id' | 'created_at'>) => void;
   updateCompany: (company: Company) => void;
   deleteCompany: (id: string) => void;
@@ -151,7 +153,14 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         name: s.name.replace(/[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{1F600}-\u{1F64F}\u{1F680}-\u{1F6FF}]/gu, '').trim()
       }))
     }));
-    setData({ ...loadedData, pipelines: cleanPipelines });
+
+    // Purge old auto-created contacts from localStorage to reset total contacts to 0
+    if (typeof window !== 'undefined' && localStorage.getItem('CRM_PURGED_OLD_CONTACTS_V3') !== 'true') {
+      loadedData.contacts = [];
+      localStorage.setItem('CRM_PURGED_OLD_CONTACTS_V3', 'true');
+    }
+
+    setData({ ...loadedData, pipelines: cleanPipelines, contacts: loadedData.contacts });
 
     if (typeof window !== 'undefined') {
       try {
@@ -398,7 +407,7 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // Contacts & Companies
-  const addContact = (contactData: Omit<Contact, 'id' | 'created_at'>) => {
+  const addContact = async (contactData: Omit<Contact, 'id' | 'created_at'>) => {
     const newContact: Contact = {
       ...contactData,
       id: `cont-${Date.now()}`,
@@ -408,20 +417,55 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       ...prev,
       contacts: [newContact, ...prev.contacts]
     }));
+    if (supabase) {
+      try {
+        await supabase.from('contacts').insert([newContact]);
+      } catch (e) {
+        console.warn('Supabase addContact warning:', e);
+      }
+    }
   };
 
-  const updateContact = (contact: Contact) => {
+  const updateContact = async (contact: Contact) => {
     setData((prev: CRMData) => ({
       ...prev,
       contacts: prev.contacts.map((c: Contact) => (c.id === contact.id ? contact : c))
     }));
+    if (supabase) {
+      try {
+        await supabase.from('contacts').update(contact).eq('id', contact.id);
+      } catch (e) {
+        console.warn('Supabase updateContact warning:', e);
+      }
+    }
   };
 
-  const deleteContact = (id: string) => {
+  const deleteContact = async (id: string) => {
     setData((prev: CRMData) => ({
       ...prev,
       contacts: prev.contacts.filter((c: Contact) => c.id !== id)
     }));
+    if (supabase) {
+      try {
+        await supabase.from('contacts').delete().eq('id', id);
+      } catch (e) {
+        console.warn('Supabase deleteContact warning:', e);
+      }
+    }
+  };
+
+  const clearAllContacts = async () => {
+    setData((prev: CRMData) => ({
+      ...prev,
+      contacts: []
+    }));
+    if (supabase) {
+      try {
+        await supabase.from('contacts').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+      } catch (e) {
+        console.warn('Supabase clearAllContacts warning:', e);
+      }
+    }
   };
 
   const addCompany = (companyData: Omit<Company, 'id' | 'created_at'>) => {
@@ -862,6 +906,7 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         addContact,
         updateContact,
         deleteContact,
+        clearAllContacts,
         addCompany,
         updateCompany,
         deleteCompany,

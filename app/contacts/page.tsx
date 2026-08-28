@@ -23,7 +23,7 @@ import {
 import { CSVImportExportModal } from '@/components/CSVImportExportModal';
 
 export default function ContactsPage() {
-  const { data, addContact, updateContact, deleteContact, addCompany, updateCompany, deleteCompany } = useCRM();
+  const { data, addContact, updateContact, deleteContact, clearAllContacts, addCompany, updateCompany, deleteCompany } = useCRM();
 
   const [activeTab, setActiveTab] = useState<'contacts' | 'companies'>('contacts');
   const [searchQuery, setSearchQuery] = useState('');
@@ -257,6 +257,21 @@ export default function ContactsPage() {
               <FileSpreadsheet className="w-4 h-4 text-emerald-700" />
               <span>Importar / Exportar CSV</span>
             </button>
+
+            {activeTab === 'contacts' && data.contacts.length > 0 && (
+              <button
+                onClick={() => {
+                  if (confirm("¿Estás seguro de eliminar TODOS los contactos del CRM? Esta acción no se puede deshacer.")) {
+                    clearAllContacts();
+                  }
+                }}
+                className="flex items-center gap-1.5 bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 text-xs font-bold px-3 py-1.5 rounded-xl transition-all cursor-pointer"
+                title="Eliminar todos los contactos del CRM"
+              >
+                <Trash2 className="w-4 h-4 text-red-600" />
+                <span>Vaciar Todos</span>
+              </button>
+            )}
 
             <button
               onClick={() => (activeTab === 'contacts' ? handleOpenContactModal() : handleOpenCompanyModal())}

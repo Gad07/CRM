@@ -132,10 +132,24 @@ function getInitials(name: string) {
 function unifyWhatsAppThreads(
   rawList: WhatsAppThread[],
   myPhone?: string,
-  lidMap?: Record<string, string>
+  lidMap?: Record<string, string>,
+  crmContacts?: Array<{ name: string; phone?: string; company_name?: string }>
 ): WhatsAppThread[] {
   const cleanMyPhone = (myPhone || "5217223659263").replace(/[^\d]/g, "");
   const resolvedLidMap: Record<string, string> = lidMap || {};
+
+  const crmMap = new Map<string, { name: string; company_name?: string }>();
+  if (crmContacts) {
+    crmContacts.forEach((c) => {
+      if (c.phone) {
+        const p = c.phone.replace(/[^\d]/g, "");
+        if (p) {
+          crmMap.set(p, c);
+          if (p.length >= 10) crmMap.set(p.slice(-10), c);
+        }
+      }
+    });
+  }
 
   // Only keep chats with real messages
   const valid = rawList.filter((t) => t && t.messages && t.messages.length > 0);
@@ -156,12 +170,16 @@ function unifyWhatsAppThreads(
     // Key is the RESOLVED phone (or group JID)
     const key = isGroup ? rawPhone : (resolvedPhone || thread.id);
 
-    let displayName = thread.contact_name;
+    const crmMatch = !isGroup && !isMyOwn ? (crmMap.get(cleanPhone) || crmMap.get(resolvedPhone) || (cleanPhone.length >= 10 ? crmMap.get(cleanPhone.slice(-10)) : undefined)) : undefined;
+
+    let displayName = crmMatch?.name || thread.contact_name;
     if (isMyOwn) {
       displayName = "Tú (Mensajes Personales)";
     } else if (!displayName || displayName === "Gad Palma") {
       displayName = isGroup ? "Grupo WhatsApp" : `+${resolvedPhone}`;
     }
+
+    const companyName = isGroup ? "Grupo WhatsApp" : isMyOwn ? "Personal" : (crmMatch?.company_name || thread.company_name || "WhatsApp");
 
     if (!map.has(key)) {
       const msgs = [...(thread.messages || [])];
@@ -175,9 +193,9 @@ function unifyWhatsAppThreads(
       map.set(key, {
         ...thread,
         id: `chat-wa-${key}`,
-        contact_name: isLid ? `+${resolvedPhone}` : displayName,
+        contact_name: isLid && !crmMatch ? `+${resolvedPhone}` : displayName,
         phone: isGroup ? rawPhone : (resolvedPhone ? `+${resolvedPhone}` : rawPhone),
-        company_name: isGroup ? "Grupo WhatsApp" : isMyOwn ? "Personal" : "WhatsApp",
+        company_name: companyName,
         deal_title: isGroup ? "Chat Grupal" : isMyOwn ? "Notas Personales" : "Conversación directa",
         last_message: last ? last.text : thread.last_message,
         last_time: lastTime,
@@ -186,8 +204,10 @@ function unifyWhatsAppThreads(
       });
     } else {
       const existing = map.get(key)!;
-      // Keep the better display name (prefer real contact name over +phone)
-      if (displayName && !displayName.startsWith("+") && displayName !== "Contacto WhatsApp" && !isLid) {
+      if (crmMatch?.name) {
+        existing.contact_name = crmMatch.name;
+        if (crmMatch.company_name) existing.company_name = crmMatch.company_name;
+      } else if (displayName && !displayName.startsWith("+") && displayName !== "Contacto WhatsApp" && !isLid) {
         existing.contact_name = displayName;
       }
       const existingIds = new Set(existing.messages.map((m) => m.id));
@@ -727,24 +747,7 @@ export default function WhatsAppInboxPage() {
       if (Array.isArray(resData.chats) && resData.chats.length > 0) {
         setHasLiveMessages(true);
         const lidMap: Record<string, string> = resData.lidMap || {};
-        const unified = unifyWhatsAppThreads(resData.chats, connectedPhone, lidMap);
-
-        // Auto-sync contacts with CRM Contacts database so every WhatsApp thread is a CRM contact
-        const existingPhones = new Set(data.contacts.map((c) => (c.phone ? c.phone.replace(/[^\d]/g, "") : "")));
-        unified.forEach((t) => {
-          const cleanP = t.phone.replace(/[^\d]/g, "");
-          if (cleanP && !existingPhones.has(cleanP) && !t.phone.includes("@g.us")) {
-            existingPhones.add(cleanP);
-            addContact({
-              name: t.contact_name,
-              email: `${cleanP}@whatsapp.com`,
-              phone: t.phone,
-              company_name: t.company_name || "WhatsApp Contact",
-              role: "Prospecto",
-              custom_fields: {},
-            });
-          }
-        });
+        const unified = unifyWhatsAppThreads(resData.chats, connectedPhone, lidMap, data.contacts);
 
         setThreads(unified);
         if (typeof window !== "undefined") {
@@ -757,6 +760,14 @@ export default function WhatsAppInboxPage() {
       }
     } catch {}
   }, [connectedPhone, data.contacts, addContact]);
+
+  // Instantly re-apply contact names and update threads list whenever CRM contacts are added or deleted
+  useEffect(() => {
+    setThreads((prev) => {
+      if (prev.length === 0) return prev;
+      return unifyWhatsAppThreads(prev, connectedPhone, undefined, data.contacts);
+    });
+  }, [data.contacts, connectedPhone]);
 
   const pollForNewMessages = useCallback(async () => {
     if (isPolling) return;

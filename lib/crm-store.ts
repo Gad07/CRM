@@ -66,32 +66,7 @@ const defaultCompanies: Company[] = [
   }
 ];
 
-const defaultContacts: Contact[] = [
-  {
-    id: 'cont-1',
-    name: 'Carlos Mendoza',
-    email: 'carlos.mendoza@metropolis.com',
-    phone: '+502 5544-8899',
-    role: 'Director de Inversiones',
-    company_id: 'comp-1',
-    company_name: 'Corporación Inmobiliaria Metrópolis',
-    notes: 'Interesado en proyectos comerciales y edificios corporativos.',
-    custom_fields: { financing_type: 'Crédito Hipotecario' },
-    created_at: '2026-08-01T00:00:00.000Z'
-  },
-  {
-    id: 'cont-2',
-    name: 'Ana Sofía Rodríguez',
-    email: 'ana.rodriguez@grupoalfa.io',
-    phone: '+502 4123-9900',
-    role: 'Gerente de Adquisiciones',
-    company_id: 'comp-2',
-    company_name: 'Grupo Inversor Alfa',
-    notes: 'Busca oportunidades con alto retorno de inversión.',
-    custom_fields: {},
-    created_at: '2026-08-01T00:00:00.000Z'
-  }
-];
+const defaultContacts: Contact[] = [];
 
 const defaultDeals: Deal[] = [
   {
@@ -225,7 +200,7 @@ export function loadCRMData(): CRMData {
         pipelines: parsed.pipelines || defaultPipelines,
         active_pipeline_id: parsed.active_pipeline_id || parsed.pipelines?.[0]?.id || 'pipe-1',
         deals: parsed.deals || defaultDeals,
-        contacts: parsed.contacts || defaultContacts,
+        contacts: Array.isArray(parsed.contacts) ? parsed.contacts : [],
         companies: parsed.companies || defaultCompanies,
         custom_fields: parsed.custom_fields || defaultCustomFields,
         activities: parsed.activities || defaultActivities,
