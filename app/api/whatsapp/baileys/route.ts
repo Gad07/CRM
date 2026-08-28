@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
-const BAILEYS_URL = "http://127.0.0.1:3001";
+const BAILEYS_URL = process.env.BAILEYS_SERVER_URL || process.env.NEXT_PUBLIC_BAILEYS_SERVER_URL || "http://127.0.0.1:3001";
 
 export async function GET() {
   try {

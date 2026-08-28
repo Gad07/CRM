@@ -5,7 +5,7 @@ const http = require('http');
 const path = require('path');
 const fs = require('fs');
 
-const PORT = 3001;
+const PORT = process.env.PORT || 3001;
 const AUTH_FOLDER = path.join(__dirname, '..', 'baileys_auth_info');
 
 // In-memory server state
@@ -286,10 +286,10 @@ const server = http.createServer(async (req, res) => {
   res.end(JSON.stringify({ error: 'Ruta no encontrada' }));
 });
 
-server.listen(PORT, () => {
+server.listen(PORT, '0.0.0.0', () => {
   console.log(`====================================================`);
   console.log(`🟢 Servidor WhatsApp Baileys escuchando en puerto ${PORT}`);
-  console.log(`🔗 API de Estado: http://localhost:${PORT}/api/status`);
+  console.log(`🔗 API de Estado: http://0.0.0.0:${PORT}/api/status`);
   console.log(`====================================================`);
   startBaileys();
 });
