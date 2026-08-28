@@ -68,6 +68,43 @@ function registerContact(c) {
       }
     }
   }
+
+  // KEY FIX: if a LID→phone mapping was just established, migrate any chat stored
+  // under the LID key into the canonical phone-keyed chat so they don't appear as two separate chats
+  if (c.lid && cleanPhone) {
+    const cleanLid = c.lid.replace('@lid', '');
+    const lidChat = chatsMap.get(cleanLid);
+    if (lidChat) {
+      const phoneChat = chatsMap.get(cleanPhone);
+      if (phoneChat) {
+        // Merge LID messages into the phone chat (avoid duplicates)
+        const existingIds = new Set(phoneChat.messages.map(m => m.id));
+        for (const msg of lidChat.messages) {
+          if (!existingIds.has(msg.id)) {
+            phoneChat.messages.push(msg);
+            existingIds.add(msg.id);
+          }
+        }
+        phoneChat.messages.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+        const last = phoneChat.messages[phoneChat.messages.length - 1];
+        if (last) {
+          phoneChat.last_message = last.text;
+          phoneChat.last_time = new Date(last.timestamp).toLocaleTimeString('es-GT', { hour: '2-digit', minute: '2-digit' });
+        }
+        if (name && (!phoneChat.contact_name || phoneChat.contact_name.startsWith('+'))) {
+          phoneChat.contact_name = name;
+        }
+      } else {
+        // No phone chat yet – just rename and re-key the LID chat under the phone key
+        lidChat.id = `chat-wa-${cleanPhone}`;
+        lidChat.phone = `${cleanPhone}@s.whatsapp.net`;
+        if (name) lidChat.contact_name = name;
+        chatsMap.set(cleanPhone, lidChat);
+      }
+      // Remove the stale LID-keyed entry
+      chatsMap.delete(cleanLid);
+    }
+  }
 }
 
 function extractMessageText(m) {
@@ -177,7 +214,9 @@ async function processMessage(m) {
   }
 
   const myPhone = connectionState.user?.phone || '';
+  const myName = connectionState.user?.name || '';
   const isSelfChat = canonicalKey === myPhone;
+  const isLidJid = remoteJid.includes('@lid');
 
   let senderName = '';
   if (isSelfChat) {
@@ -185,7 +224,15 @@ async function processMessage(m) {
   } else if (isGroup) {
     senderName = contactsMap.get(remoteJid) || (fromMe ? null : m.pushName) || 'Grupo de WhatsApp';
   } else {
-    senderName = contactsMap.get(canonicalKey) || contactsMap.get(remoteJid) || (fromMe ? null : m.pushName) || `+${canonicalKey}`;
+    // For LID JIDs: try contactsMap first, then pushName from any direction
+    // NEVER set the chat name to our own name (myName/Gad Palma)
+    const mappedName = contactsMap.get(canonicalKey) || contactsMap.get(remoteJid);
+    const pushName = m.pushName;
+    const safePushName = (!fromMe && pushName && pushName !== myName) ? pushName : null;
+    // For LID chats, also check if lidToPhoneMap can give us a resolved phone to look up
+    const resolvedPhone = isLidJid ? lidToPhoneMap.get(canonicalKey) : null;
+    const resolvedName = resolvedPhone ? (contactsMap.get(resolvedPhone) || contactsMap.get(`${resolvedPhone}@s.whatsapp.net`)) : null;
+    senderName = mappedName || resolvedName || safePushName || (isLidJid ? null : `+${canonicalKey}`) || `+${canonicalKey}`;
   }
 
   const timestamp = m.messageTimestamp
@@ -349,7 +396,7 @@ async function startBaileys() {
       if (Array.isArray(chats)) chats.forEach(c => registerChat(c));
     });
 
-    sock.ev.on('messaging-history.set', ({ chats, contacts, messages }) => {
+    sock.ev.on('messaging-history.set', async ({ chats, contacts, messages }) => {
       console.log(`📥 [WhatsApp Baileys] Sincronizando historial completo: ${chats?.length || 0} chats, ${contacts?.length || 0} contactos, ${messages?.length || 0} mensajes recibidos del teléfono.`);
 
       if (Array.isArray(contacts)) {
@@ -476,8 +523,10 @@ const server = http.createServer(async (req, res) => {
     const chatsList = Array.from(chatsMap.values()).sort(
       (a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime()
     );
+    // Include lidToPhoneMap so the frontend can resolve LID numbers → real phone numbers
+    const lidMap = Object.fromEntries(lidToPhoneMap);
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ chats: chatsList }));
+    res.end(JSON.stringify({ chats: chatsList, lidMap }));
     return;
   }
 

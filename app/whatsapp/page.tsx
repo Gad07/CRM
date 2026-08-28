@@ -56,13 +56,18 @@ function getInitials(name: string) {
   if (!clean) return name.substring(0, 2) || "WA";
   return clean.split(" ").map((n) => n[0]).join("").substring(0, 2).toUpperCase();
 }
-function unifyWhatsAppThreads(rawList: WhatsAppThread[], myPhone?: string): WhatsAppThread[] {
+function unifyWhatsAppThreads(
+  rawList: WhatsAppThread[],
+  myPhone?: string,
+  lidMap?: Record<string, string>
+): WhatsAppThread[] {
   const cleanMyPhone = (myPhone || "5217223659263").replace(/[^\d]/g, "");
+  const resolvedLidMap: Record<string, string> = lidMap || {};
 
   // Only keep chats with real messages
   const valid = rawList.filter((t) => t && t.messages && t.messages.length > 0);
 
-  // Group strictly 1:1 by phone/JID
+  // Group strictly 1:1 by resolved phone/JID
   const map = new Map<string, WhatsAppThread>();
 
   valid.forEach((thread) => {
@@ -71,14 +76,18 @@ function unifyWhatsAppThreads(rawList: WhatsAppThread[], myPhone?: string): What
     const isGroup = rawPhone.includes("@g.us") || thread.company_name === "Grupo WhatsApp";
     const isMyOwn = cleanMyPhone && (cleanPhone === cleanMyPhone || cleanPhone === "527223659263" || cleanPhone === "5217223659263");
 
-    // Key is strictly the phone number or group ID
-    const key = isGroup ? rawPhone : (cleanPhone || thread.id);
+    // Resolve LID to real phone using the server-provided map
+    const resolvedPhone = (!isGroup && resolvedLidMap[cleanPhone]) ? resolvedLidMap[cleanPhone] : cleanPhone;
+    const isLid = !isGroup && !isMyOwn && (resolvedPhone !== cleanPhone);
+
+    // Key is the RESOLVED phone (or group JID)
+    const key = isGroup ? rawPhone : (resolvedPhone || thread.id);
 
     let displayName = thread.contact_name;
     if (isMyOwn) {
       displayName = "Tú (Mensajes Personales)";
     } else if (!displayName || displayName === "Gad Palma") {
-      displayName = isGroup ? "Grupo WhatsApp" : `+${cleanPhone}`;
+      displayName = isGroup ? "Grupo WhatsApp" : `+${resolvedPhone}`;
     }
 
     if (!map.has(key)) {
@@ -93,8 +102,8 @@ function unifyWhatsAppThreads(rawList: WhatsAppThread[], myPhone?: string): What
       map.set(key, {
         ...thread,
         id: `chat-wa-${key}`,
-        contact_name: displayName,
-        phone: isGroup ? rawPhone : (cleanPhone ? `+${cleanPhone}` : rawPhone),
+        contact_name: isLid ? `+${resolvedPhone}` : displayName,
+        phone: isGroup ? rawPhone : (resolvedPhone ? `+${resolvedPhone}` : rawPhone),
         company_name: isGroup ? "Grupo WhatsApp" : isMyOwn ? "Personal" : "WhatsApp",
         deal_title: isGroup ? "Chat Grupal" : isMyOwn ? "Notas Personales" : "Conversación directa",
         last_message: last ? last.text : thread.last_message,
@@ -104,7 +113,8 @@ function unifyWhatsAppThreads(rawList: WhatsAppThread[], myPhone?: string): What
       });
     } else {
       const existing = map.get(key)!;
-      if (displayName && !displayName.startsWith("+") && displayName !== "Contacto WhatsApp") {
+      // Keep the better display name (prefer real contact name over +phone)
+      if (displayName && !displayName.startsWith("+") && displayName !== "Contacto WhatsApp" && !isLid) {
         existing.contact_name = displayName;
       }
       const existingIds = new Set(existing.messages.map((m) => m.id));
@@ -125,6 +135,50 @@ function unifyWhatsAppThreads(rawList: WhatsAppThread[], myPhone?: string): What
       }
     }
   });
+
+  // --- Second pass: try to merge remaining unresolved LID orphans by contact name ---
+  const nameToRealKey = new Map<string, string>();
+  map.forEach((thread, key) => {
+    if (thread.contact_name && !thread.contact_name.startsWith("+")) {
+      nameToRealKey.set(thread.contact_name.toLowerCase(), key);
+    }
+  });
+
+  const toDelete: string[] = [];
+  map.forEach((thread, key) => {
+    const cleanKey = key.replace(/[^\d]/g, "");
+    const isLidKey = !key.includes("@g.us") && cleanKey.length >= 14 && !resolvedLidMap[cleanKey];
+    if (!isLidKey) return;
+
+    const lowerName = thread.contact_name.toLowerCase();
+    const realKey = nameToRealKey.get(lowerName);
+    if (realKey && map.has(realKey)) {
+      // Only merge if the name is a real contact name (not +phone)
+      if (!thread.contact_name.startsWith("+")) {
+        const realChat = map.get(realKey)!;
+        const existingIds = new Set(realChat.messages.map((m) => m.id));
+        thread.messages.forEach((m) => {
+          if (!existingIds.has(m.id)) {
+            realChat.messages.push(m);
+            existingIds.add(m.id);
+          }
+        });
+        realChat.messages.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+        const last = realChat.messages[realChat.messages.length - 1];
+        if (last) {
+          realChat.last_message = last.text;
+          const d = new Date(last.timestamp);
+          realChat.last_time = !isNaN(d.getTime())
+            ? d.toLocaleTimeString("es-GT", { hour: "2-digit", minute: "2-digit" })
+            : last.timestamp;
+        }
+        toDelete.push(key);
+      }
+    }
+    // NOTE: We intentionally do NOT drop unresolvable LID orphans.
+    // Dropping them would lose real conversation messages. They stay visible as +phoneNumber chats.
+  });
+  toDelete.forEach((k) => map.delete(k));
 
   const list = Array.from(map.values());
   list.sort((a, b) => {
@@ -283,7 +337,8 @@ export default function WhatsAppInboxPage() {
       const resData = await res.json();
       if (Array.isArray(resData.chats) && resData.chats.length > 0) {
         setHasLiveMessages(true);
-        const unified = unifyWhatsAppThreads(resData.chats, connectedPhone);
+        const lidMap: Record<string, string> = resData.lidMap || {};
+        const unified = unifyWhatsAppThreads(resData.chats, connectedPhone, lidMap);
 
         setThreads(unified);
         if (typeof window !== "undefined") {
