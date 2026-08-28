@@ -149,7 +149,12 @@ function registerChat(c) {
   }
 }
 
+let isStarting = false;
+
 async function startBaileys() {
+  if (isStarting) return;
+  isStarting = true;
+
   try {
     if (!fs.existsSync(AUTH_FOLDER)) {
       fs.mkdirSync(AUTH_FOLDER, { recursive: true });
@@ -261,17 +266,19 @@ async function startBaileys() {
         connectionState.lastError = lastDisconnect?.error?.message || 'Conexión cerrada';
 
         console.log(`⚠️ [WhatsApp Baileys] Conexión cerrada (Código ${statusCode}). Reintentando: ${shouldReconnect}`);
+        isStarting = false;
 
-        if (statusCode === DisconnectReason.loggedOut) {
-          console.log('🔒 [WhatsApp Baileys] Sesión cerrada desde el celular. Limpiando credenciales...');
+        if (statusCode === DisconnectReason.loggedOut || statusCode === 440) {
+          console.log(`🔒 [WhatsApp Baileys] Código ${statusCode}. Limpiando credenciales para nuevo emparejamiento limpio...`);
           try {
             fs.rmSync(AUTH_FOLDER, { recursive: true, force: true });
           } catch (err) {}
-          setTimeout(() => startBaileys(), 3000);
+          setTimeout(() => startBaileys(), 2000);
         } else if (shouldReconnect) {
           setTimeout(() => startBaileys(), 3000);
         }
       } else if (connection === 'open') {
+        isStarting = false;
         connectionState.connected = true;
         connectionState.state = 'connected';
         connectionState.qr = null;
