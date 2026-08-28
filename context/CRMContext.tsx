@@ -109,6 +109,9 @@ interface CRMContextType {
   activeTenant: CRMCompanyTenant;
   switchTenant: (tenantId: string) => void;
   addTenant: (tenant: Omit<CRMCompanyTenant, 'id' | 'created_at'>) => void;
+  updateTenant: (tenant: CRMCompanyTenant) => void;
+  deleteTenant: (id: string) => void;
+  toggleTenantStatus: (id: string) => void;
   importContacts: (newContacts: Omit<Contact, 'id' | 'created_at'>[]) => void;
   importDeals: (newDeals: Omit<Deal, 'id' | 'created_at'>[]) => void;
   applyIndustryPreset: (presetId: string) => void;
@@ -806,6 +809,39 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     switchTenant(newTenant.id);
   };
 
+  const updateTenant = (tenant: CRMCompanyTenant) => {
+    setTenants(prev => prev.map(t => (t.id === tenant.id ? tenant : t)));
+    if (activeTenantId === tenant.id) {
+      setData(prev => ({
+        ...prev,
+        settings: {
+          ...prev.settings,
+          company_name: tenant.name,
+          currency_symbol: tenant.currency_symbol,
+          currency_code: tenant.currency_code
+        }
+      }));
+    }
+  };
+
+  const deleteTenant = (id: string) => {
+    if (tenants.length <= 1) {
+      alert('No puedes eliminar la única empresa activa.');
+      return;
+    }
+    const remaining = tenants.filter(t => t.id !== id);
+    setTenants(remaining);
+    if (activeTenantId === id) {
+      switchTenant(remaining[0].id);
+    }
+  };
+
+  const toggleTenantStatus = (id: string) => {
+    setTenants(prev =>
+      prev.map(t => (t.id === id ? { ...t, is_active: !t.is_active } : t))
+    );
+  };
+
   return (
     <CRMContext.Provider
       value={{
@@ -869,6 +905,9 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         activeTenant,
         switchTenant,
         addTenant,
+        updateTenant,
+        deleteTenant,
+        toggleTenantStatus,
         getLeadScoreInfo,
         importContacts,
         importDeals,

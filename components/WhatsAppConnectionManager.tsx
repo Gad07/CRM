@@ -18,8 +18,11 @@ import {
   SlidersHorizontal,
   AlertCircle,
   Wifi,
+  WifiOff,
   Send,
-  HelpCircle
+  HelpCircle,
+  QrCode,
+  X
 } from "lucide-react";
 import { useCRM } from "@/context/CRMContext";
 
@@ -48,7 +51,7 @@ function lsDel(key: string) {
 }
 
 export function WhatsAppConnectionManager() {
-  const [provider, setProvider] = useState<"meta" | "twilio">("meta");
+  const [provider, setProvider] = useState<"baileys" | "meta" | "twilio">("baileys");
   const [phoneNumberId, setPhoneNumberId] = useState("");
   const [businessAccountId, setBusinessAccountId] = useState("");
   const [accessToken, setAccessToken] = useState("");
@@ -60,6 +63,20 @@ export function WhatsAppConnectionManager() {
   const [twilioToken, setTwilioToken] = useState("");
   const [twilioFrom, setTwilioFrom] = useState("");
 
+  // Baileys state
+  const [baileysState, setBaileysState] = useState<{
+    connected: boolean;
+    state: string;
+    qr: string | null;
+    user: { id: string; phone: string; name: string } | null;
+    message?: string;
+  }>({
+    connected: false,
+    state: "checking",
+    qr: null,
+    user: null,
+  });
+
   const [copied, setCopied] = useState(false);
   const [isSaved, setIsSaved] = useState(false);
   const [isSendingReal, setIsSendingReal] = useState(false);
@@ -69,13 +86,31 @@ export function WhatsAppConnectionManager() {
   const [isConnected, setIsConnected] = useState(false);
   const [webhookUrl, setWebhookUrl] = useState("/api/webhooks/whatsapp");
 
+  const checkBaileys = async () => {
+    try {
+      const res = await fetch("/api/whatsapp/baileys");
+      if (!res.ok) return;
+      const data = await res.json();
+      setBaileysState(data);
+      if (data.connected && data.user?.phone) {
+        setIsConnected(true);
+        if (typeof window !== "undefined") {
+          localStorage.setItem(WA_KEYS.IS_CONNECTED, "true");
+          localStorage.setItem(WA_KEYS.USER_PHONE, data.user.phone);
+        }
+      }
+    } catch {}
+  };
+
   useEffect(() => {
     setMounted(true);
     if (typeof window !== "undefined") {
       const origin = window.location.origin;
       setWebhookUrl(`${origin}/api/webhooks/whatsapp`);
       const savedProvider = ls(WA_KEYS.PROVIDER);
-      setProvider(savedProvider === "twilio" ? "twilio" : "meta");
+      if (savedProvider === "meta" || savedProvider === "twilio" || savedProvider === "baileys") {
+        setProvider(savedProvider);
+      }
       setPhoneNumberId(ls(WA_KEYS.PHONE_ID));
       setBusinessAccountId(ls(WA_KEYS.BUSINESS_ID));
       setAccessToken(ls(WA_KEYS.ACCESS_TOKEN));
@@ -85,6 +120,9 @@ export function WhatsAppConnectionManager() {
       setTwilioFrom(ls(WA_KEYS.TWILIO_FROM));
       setIsConnected(ls(WA_KEYS.IS_CONNECTED) === "true");
     }
+    checkBaileys();
+    const interval = setInterval(checkBaileys, 3000);
+    return () => clearInterval(interval);
   }, []);
 
   const handleCopyWebhook = () => {
@@ -124,7 +162,16 @@ export function WhatsAppConnectionManager() {
     setTimeout(() => setIsSaved(false), 3000);
   };
 
-  const handleDisconnect = () => {
+  const handleDisconnect = async () => {
+    if (provider === "baileys") {
+      try {
+        await fetch("/api/whatsapp/baileys", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "disconnect" })
+        });
+      } catch {}
+    }
     setIsConnected(false);
     lsDel(WA_KEYS.IS_CONNECTED);
     lsDel(WA_KEYS.PHONE_ID);
@@ -132,6 +179,7 @@ export function WhatsAppConnectionManager() {
     lsDel(WA_KEYS.TWILIO_SID);
     lsDel(WA_KEYS.TWILIO_TOKEN);
     lsDel(WA_KEYS.TWILIO_FROM);
+    checkBaileys();
   };
 
   const handleTestSend = async () => {
@@ -144,6 +192,31 @@ export function WhatsAppConnectionManager() {
     setIsSendingReal(true);
 
     try {
+      if (provider === "baileys") {
+        const res = await fetch("/api/whatsapp/baileys", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "send",
+            to: testPhone,
+            message: "⚡ ¡Hola! Mensaje de prueba enviado exitosamente desde tu CRM Adaptable mediante WhatsApp Web vinculado por QR.",
+          })
+        });
+        const data = await res.json();
+        if (res.ok && data.success) {
+          setSendResult({
+            ok: true,
+            msg: `✅ Mensaje REAL enviado con éxito por WhatsApp Web (Baileys) a +${data.to}. ID: ${data.message_id}`,
+          });
+        } else {
+          setSendResult({
+            ok: false,
+            msg: `❌ Error: ${data.error || "No se pudo enviar vía WhatsApp Web. Asegúrate de tener el código QR escaneado."}`,
+          });
+        }
+        return;
+      }
+
       const body: Record<string, any> = {
         to: testPhone,
         message: "⚡ Hola! Mensaje de prueba enviado desde tu CRM Adaptable. ¡La integración de WhatsApp está funcionando correctamente!",
@@ -206,16 +279,16 @@ export function WhatsAppConnectionManager() {
           <div className="flex items-center gap-2 flex-wrap">
             <h2 className="text-base font-extrabold text-slate-900 flex items-center gap-2">
               <MessageSquare className="w-5 h-5 text-emerald-600" />
-              Conexión Oficial de WhatsApp (Meta Cloud API & Twilio)
+              Integración de WhatsApp (QR Web, Meta Cloud API o Twilio)
             </h2>
             {isConnected && mounted && (
               <span className="bg-emerald-100 text-emerald-800 border border-emerald-300 text-[10px] font-extrabold px-2.5 py-0.5 rounded-full flex items-center gap-1">
-                <Wifi className="w-3 h-3 text-emerald-600" /> Conectado Oficial
+                <Wifi className="w-3 h-3 text-emerald-600" /> Conectado Activo
               </span>
             )}
           </div>
           <p className="text-xs text-slate-500 font-medium mt-0.5">
-            Conecta tu cuenta empresarial para enviar y recibir mensajes de WhatsApp en tiempo real desde el CRM.
+            Vincula cualquier número escaneando el código QR con tu celular o usa la API oficial de Meta para empresas.
           </p>
         </div>
         {isConnected && mounted && (
@@ -229,13 +302,19 @@ export function WhatsAppConnectionManager() {
       </div>
 
       {/* Provider selector */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         {[
           {
+            key: "baileys",
+            icon: <QrCode className="w-4 h-4 text-emerald-600" />,
+            title: "WhatsApp Web (Código QR)",
+            desc: "Escanea el código con tu celular (Personal o Business). 100% gratis y sin verificación en Meta.",
+          },
+          {
             key: "meta",
-            icon: <Zap className="w-4 h-4 text-emerald-600" />,
-            title: "Meta Cloud API (Oficial de WhatsApp)",
-            desc: "1,000 conversaciones gratis al mes. API oficial de Meta para envíos y webhooks en vivo.",
+            icon: <Zap className="w-4 h-4 text-indigo-600" />,
+            title: "Meta Cloud API (Oficial)",
+            desc: "1,000 conversaciones gratis al mes. Requiere cuenta comercial verificada en Meta Business.",
           },
           {
             key: "twilio",
@@ -246,7 +325,10 @@ export function WhatsAppConnectionManager() {
         ].map(({ key, icon, title, desc }) => (
           <div
             key={key}
-            onClick={() => setProvider(key as any)}
+            onClick={() => {
+              setProvider(key as any);
+              lsSet(WA_KEYS.PROVIDER, key);
+            }}
             className={`${cardBase} ${provider === key ? cardActive : cardIdle}`}
           >
             <div className="flex items-center justify-between mb-1 pointer-events-none">
@@ -259,6 +341,112 @@ export function WhatsAppConnectionManager() {
           </div>
         ))}
       </div>
+
+      {/* ── MODE 0: BAILEYS QR SCANNER ── */}
+      {provider === "baileys" && (
+        <div className="bg-slate-50 border border-slate-200 rounded-2xl p-6 space-y-6">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-slate-200 pb-4">
+            <div>
+              <h3 className="text-sm font-extrabold text-slate-900 flex items-center gap-2">
+                <QrCode className="w-4 h-4 text-emerald-600" /> Vinculación por Código QR en Tiempo Real
+              </h3>
+              <p className="text-xs text-slate-500 font-medium">
+                Conexión WebSocket directa con los servidores de WhatsApp mediante protocolo Noise/Multi-Device.
+              </p>
+            </div>
+            {baileysState.connected ? (
+              <span className="bg-emerald-100 text-emerald-800 text-xs font-extrabold px-3 py-1 rounded-full border border-emerald-300 flex items-center gap-1.5">
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> Conectado (+{baileysState.user?.phone})
+              </span>
+            ) : (
+              <span className="bg-amber-100 text-amber-900 text-xs font-bold px-3 py-1 rounded-full border border-amber-300 flex items-center gap-1.5">
+                <RefreshCw className="w-3.5 h-3.5 animate-spin text-amber-700" /> Esperando vinculación
+              </span>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-12 gap-6 items-center">
+            <div className="md:col-span-5 flex flex-col items-center justify-center p-4 bg-white border border-slate-200 rounded-2xl shadow-2xs">
+              {baileysState.connected ? (
+                <div className="py-8 text-center space-y-3">
+                  <div className="w-16 h-16 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto ring-8 ring-emerald-50">
+                    <CheckCircle2 className="w-8 h-8" />
+                  </div>
+                  <h4 className="text-sm font-extrabold text-slate-900">¡Dispositivo Vinculado!</h4>
+                  <p className="text-xs text-slate-600 font-medium">
+                    Teléfono: <span className="font-bold text-emerald-700">+{baileysState.user?.phone}</span>
+                  </p>
+                  {baileysState.user?.name && (
+                    <p className="text-[11px] text-slate-400">{baileysState.user.name}</p>
+                  )}
+                  <button
+                    onClick={handleDisconnect}
+                    className="mt-2 text-xs font-bold text-red-600 hover:text-red-800 underline cursor-pointer"
+                  >
+                    Desvincular y generar nuevo QR
+                  </button>
+                </div>
+              ) : baileysState.state === "server_offline" ? (
+                <div className="py-6 text-center space-y-3">
+                  <WifiOff className="w-8 h-8 text-amber-600 mx-auto" />
+                  <p className="text-xs font-bold text-slate-900">Servidor de WhatsApp Desconectado</p>
+                  <p className="text-[11px] text-slate-500">Ejecuta en tu terminal:</p>
+                  <code className="bg-slate-900 text-emerald-400 font-mono text-[11px] px-2 py-1 rounded-md block">
+                    npm run whatsapp:server
+                  </code>
+                </div>
+              ) : baileysState.qr ? (
+                <div className="space-y-2 text-center">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={baileysState.qr}
+                    alt="Código QR de WhatsApp"
+                    className="w-56 h-56 rounded-xl bg-white p-2 border border-slate-100 mx-auto shadow-xs"
+                  />
+                  <p className="text-[10px] text-slate-400 font-bold flex items-center justify-center gap-1">
+                    <RefreshCw className="w-3 h-3 animate-spin text-emerald-600" /> Sincronización criptográfica activa
+                  </p>
+                </div>
+              ) : (
+                <div className="w-56 h-56 flex flex-col items-center justify-center gap-3 text-slate-400">
+                  <Loader2 className="w-8 h-8 animate-spin text-emerald-600" />
+                  <span className="text-xs font-bold text-slate-600">Generando QR...</span>
+                </div>
+              )}
+            </div>
+
+            <div className="md:col-span-7 space-y-4">
+              <div className="bg-emerald-50/60 border border-emerald-200/80 rounded-2xl p-4 text-xs text-emerald-950 space-y-2">
+                <h5 className="font-extrabold flex items-center gap-1.5 text-emerald-900 text-xs">
+                  <Smartphone className="w-4 h-4 text-emerald-700" /> Pasos para escanear desde tu celular:
+                </h5>
+                <ol className="list-decimal list-inside space-y-1.5 font-medium text-xs text-emerald-900/90 pl-1">
+                  <li>Abre la aplicación de <strong>WhatsApp</strong> en tu teléfono.</li>
+                  <li>Toca el menú de <strong>tres puntos</strong> (Android) o ve a <strong>Configuración</strong> (iPhone).</li>
+                  <li>Selecciona la opción <strong>Dispositivos vinculados</strong>.</li>
+                  <li>Toca el botón verde <strong>Vincular un dispositivo</strong>.</li>
+                  <li>Apunta la cámara de tu teléfono al código QR mostrado a la izquierda.</li>
+                </ol>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={checkBaileys}
+                  className="bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 font-bold text-xs px-4 py-2 rounded-xl transition-colors cursor-pointer flex items-center gap-1.5 shadow-2xs"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" /> Actualizar Estado
+                </button>
+                <a
+                  href="/whatsapp"
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs px-4 py-2 rounded-xl transition-colors shadow-xs"
+                >
+                  Ir a la Bandeja de Chat →
+                </a>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── MODE 1: META CLOUD API ── */}
       {provider === "meta" && (

@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import Link from 'next/link';
 import { Navbar } from '@/components/Navbar';
+import { RoleGuard } from '@/components/RoleGuard';
 import { useCRM } from '@/context/CRMContext';
 import { ArrowLeft, Building2, Database, RotateCcw } from 'lucide-react';
 
@@ -31,10 +32,11 @@ export default function SettingsCompanyPage() {
   };
 
   return (
-    <div className="flex-1 flex flex-col min-h-screen bg-slate-50 text-slate-900">
-      <Navbar />
+    <RoleGuard permission="manage_company">
+      <div className="flex-1 flex flex-col min-h-screen bg-slate-50 text-slate-900">
+        <Navbar />
 
-      <main className="p-4 sm:p-6 space-y-6 max-w-7xl mx-auto w-full flex-1">
+        <main className="p-4 sm:p-6 space-y-6 max-w-7xl mx-auto w-full flex-1">
         <div className="flex items-center gap-3">
           <Link
             href="/settings"
@@ -181,5 +183,6 @@ CREATE TABLE IF NOT EXISTS contacts (...);`}
         </div>
       </main>
     </div>
-  );
+  </RoleGuard>
+);
 }

@@ -24,3 +24,7 @@ yarn-error.log*
 # OS metadata
 .DS_Store
 Thumbs.db
+
+# WhatsApp Baileys Auth Session
+/baileys_auth_info
+

@@ -4,6 +4,7 @@ import React from 'react';
 import Link from 'next/link';
 import { Navbar } from '@/components/Navbar';
 import { useCRM } from '@/context/CRMContext';
+import { useAuth } from '@/context/AuthContext';
 import {
   Settings,
   MessageSquare,
@@ -15,11 +16,13 @@ import {
   Building2,
   ChevronRight,
   Sparkles,
-  ShieldCheck
+  ShieldCheck,
+  Rocket
 } from 'lucide-react';
 
 export default function SettingsHubPage() {
   const { data } = useCRM();
+  const { isSuperAdmin, hasPermission } = useAuth();
 
   const settingsCards = [
     {
@@ -101,34 +104,68 @@ export default function SettingsHubPage() {
           </p>
         </div>
 
-        {/* Grid de Tarjetas de Configuración Organizadas */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+        {/* Super Admin Special Access Cards */}
+        {isSuperAdmin && (
+          <div className="bg-gradient-to-r from-indigo-900 via-slate-900 to-indigo-950 p-6 rounded-2xl border border-indigo-700/50 shadow-xl text-white flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+            <div className="space-y-1">
+              <span className="bg-indigo-500/20 text-indigo-300 border border-indigo-500/40 text-[10px] font-extrabold px-2.5 py-0.5 rounded-full uppercase tracking-wider flex items-center gap-1 w-fit">
+                <ShieldCheck className="w-3.5 h-3.5" /> Acceso Super Administrador
+              </span>
+              <h2 className="text-base font-extrabold text-white">Panel de Administración de Empresas & SaaS</h2>
+              <p className="text-xs text-slate-300 font-medium max-w-xl">
+                Crea nuevas empresas clientes, administra planes de suscripción, cuotas de usuarios y monitorea el estado global de la plataforma.
+              </p>
+            </div>
+
+            <div className="flex gap-2">
+              <Link
+                href="/onboarding"
+                className="flex items-center gap-1.5 bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs px-4 py-2 rounded-xl transition-all border border-slate-700"
+              >
+                <Rocket className="w-4 h-4 text-emerald-400" />
+                <span>Onboarding</span>
+              </Link>
+              <Link
+                href="/admin"
+                className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs px-4 py-2 rounded-xl transition-all shadow-md"
+              >
+                <ShieldCheck className="w-4 h-4" />
+                <span>Ir al Panel Master</span>
+              </Link>
+            </div>
+          </div>
+        )}
+
+        {/* Grid de Secciones */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {settingsCards.map(card => (
             <Link
               key={card.id}
               href={card.href}
-              className="bg-white border border-slate-200 hover:border-indigo-400 hover:shadow-md p-6 rounded-2xl space-y-4 transition-all group flex flex-col justify-between"
+              className="bg-white p-5 rounded-2xl border border-slate-200 hover:border-indigo-500/50 hover:shadow-md transition-all group flex flex-col justify-between space-y-4"
             >
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
-                  <div className="p-3 rounded-xl bg-slate-50 border border-slate-100 group-hover:scale-105 transition-transform">
+                  <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-100 group-hover:scale-105 transition-transform">
                     {card.icon}
                   </div>
-                  <span className={`text-[10px] font-extrabold px-2.5 py-0.5 rounded-full border ${card.badgeColor}`}>
+                  <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full border ${card.badgeColor}`}>
                     {card.badge}
                   </span>
                 </div>
 
                 <div>
-                  <h3 className="text-sm font-extrabold text-slate-900 group-hover:text-indigo-600 transition-colors">
+                  <h3 className="font-extrabold text-slate-900 text-sm group-hover:text-indigo-600 transition-colors">
                     {card.title}
                   </h3>
-                  <p className="text-xs text-slate-500 font-medium mt-1 leading-relaxed">{card.description}</p>
+                  <p className="text-xs text-slate-500 font-medium leading-relaxed mt-1">
+                    {card.description}
+                  </p>
                 </div>
               </div>
 
-              <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-xs font-bold text-indigo-600 group-hover:translate-x-1 transition-transform">
-                <span>Abrir Configuración</span>
+              <div className="pt-3 border-t border-slate-100 flex items-center justify-between text-xs font-bold text-indigo-600 group-hover:translate-x-0.5 transition-transform">
+                <span>Configurar ahora</span>
                 <ChevronRight className="w-4 h-4" />
               </div>
             </Link>

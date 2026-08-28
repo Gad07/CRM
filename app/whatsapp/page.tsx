@@ -1,9 +1,10 @@
-﻿"use client";
+"use client";
 
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   MessageSquare, Search, Send, Sparkles, CheckCheck, AlertTriangle,
   Star, ShieldCheck, Users, Phone, Plus, Loader2, WifiOff, RefreshCw, Radio,
+  QrCode, Smartphone, CheckCircle2, X, Zap
 } from "lucide-react";
 import { useCRM } from "@/context/CRMContext";
 import { Navbar } from "@/components/Navbar";
@@ -147,6 +148,72 @@ export default function WhatsAppInboxPage() {
 
   const activeThread = threads.find((t) => t.id === activeThreadId) || threads[0] || null;
 
+  // QR Modal & Baileys real connection state
+  const [isQrModalOpen, setIsQrModalOpen] = useState(false);
+  const [baileysState, setBaileysState] = useState<{
+    connected: boolean;
+    state: string;
+    qr: string | null;
+    user: { id: string; phone: string; name: string } | null;
+    message?: string;
+  }>({
+    connected: false,
+    state: "checking",
+    qr: null,
+    user: null,
+  });
+
+  const checkBaileys = useCallback(async () => {
+    try {
+      const res = await fetch("/api/whatsapp/baileys");
+      if (!res.ok) return;
+      const data = await res.json();
+      setBaileysState(data);
+      if (data.connected && data.user?.phone) {
+        setIsWhatsAppConnected(true);
+        setConnectedPhone(data.user.phone);
+        if (typeof window !== "undefined") {
+          localStorage.setItem(WA_KEYS.IS_CONNECTED, "true");
+          localStorage.setItem(WA_KEYS.USER_PHONE, data.user.phone);
+          localStorage.setItem(WA_KEYS.PROVIDER, "baileys");
+        }
+      }
+    } catch {
+      // Offline
+    }
+  }, []);
+
+  useEffect(() => {
+    checkBaileys();
+    const interval = setInterval(checkBaileys, 5000);
+    return () => clearInterval(interval);
+  }, [checkBaileys]);
+
+  // Fast polling when QR modal is open
+  useEffect(() => {
+    if (!isQrModalOpen) return;
+    checkBaileys();
+    const qrInterval = setInterval(checkBaileys, 2000);
+    return () => clearInterval(qrInterval);
+  }, [isQrModalOpen, checkBaileys]);
+
+  const handleDisconnectBaileys = async () => {
+    try {
+      await fetch("/api/whatsapp/baileys", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "disconnect" })
+      });
+      setIsWhatsAppConnected(false);
+      setConnectedPhone("");
+      if (typeof window !== "undefined") {
+        localStorage.removeItem(WA_KEYS.IS_CONNECTED);
+        localStorage.removeItem(WA_KEYS.USER_PHONE);
+      }
+      checkBaileys();
+    } catch {}
+  };
+
   const handleSendMessage = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!messageInput.trim() || !activeThread) return;
@@ -156,16 +223,37 @@ export default function WhatsAppInboxPage() {
     const sentText = messageInput.trim();
     setMessageInput(""); setSelectedTemplateId(""); setSendError(null); setIsSending(true);
     try {
-      const provider = ls(WA_KEYS.PROVIDER) || "meta";
-      const body: Record<string, any> = { to: activeThread.phone, message: sentText, threadId: activeThread.phone.replace(/[^\d]/g, "") || activeThread.id, fromPhone: ls(WA_KEYS.USER_PHONE) || "CRM" };
-      if (provider === "meta") { body.phoneNumberId = ls(WA_KEYS.PHONE_ID); body.accessToken = ls(WA_KEYS.ACCESS_TOKEN); }
-      else if (provider === "twilio") { body.twilioMode = true; body.twilioAccountSid = ls(WA_KEYS.TWILIO_SID); body.twilioAuthToken = ls(WA_KEYS.TWILIO_TOKEN); body.twilioFrom = ls(WA_KEYS.TWILIO_FROM); }
-      const res = await fetch("/api/whatsapp/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-      const resData = await res.json();
-      const finalStatus: ChatMessage["status"] = res.ok && resData.success ? "sent" : "failed";
-      const messageId = resData.message_id || optimisticId;
+      let finalStatus: ChatMessage["status"] = "sent";
+      let messageId = optimisticId;
+
+      // Check if Baileys real socket is connected
+      if (baileysState.connected) {
+        const res = await fetch("/api/whatsapp/baileys", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "send", to: activeThread.phone, message: sentText })
+        });
+        const resData = await res.json();
+        if (!res.ok || !resData.success) {
+          finalStatus = "failed";
+          setSendError(resData.error || "No se pudo enviar el mensaje por WhatsApp Web.");
+        } else {
+          messageId = resData.message_id || optimisticId;
+        }
+      } else {
+        // Fallback to Meta Cloud API or Twilio or simulation
+        const provider = ls(WA_KEYS.PROVIDER) || "meta";
+        const body: Record<string, any> = { to: activeThread.phone, message: sentText, threadId: activeThread.phone.replace(/[^\d]/g, "") || activeThread.id, fromPhone: ls(WA_KEYS.USER_PHONE) || "CRM" };
+        if (provider === "meta") { body.phoneNumberId = ls(WA_KEYS.PHONE_ID); body.accessToken = ls(WA_KEYS.ACCESS_TOKEN); }
+        else if (provider === "twilio") { body.twilioMode = true; body.twilioAccountSid = ls(WA_KEYS.TWILIO_SID); body.twilioAuthToken = ls(WA_KEYS.TWILIO_TOKEN); body.twilioFrom = ls(WA_KEYS.TWILIO_FROM); }
+        const res = await fetch("/api/whatsapp/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+        const resData = await res.json();
+        finalStatus = res.ok && resData.success ? "sent" : "failed";
+        messageId = resData.message_id || optimisticId;
+        if (!res.ok || !resData.success) setSendError(resData.error || "No se pudo enviar el mensaje.");
+      }
+
       setThreads((prev) => prev.map((t) => t.id === activeThread.id ? { ...t, messages: t.messages.map((m) => m.id === optimisticId ? { ...m, id: messageId, status: finalStatus } : m) } : t));
-      if (!res.ok || !resData.success) setSendError(resData.error || "No se pudo enviar el mensaje.");
     } catch (err: any) {
       setSendError(err.message || "Error de conexión al enviar.");
       setThreads((prev) => prev.map((t) => t.id === activeThread.id ? { ...t, messages: t.messages.map((m) => m.id === optimisticId ? { ...m, status: "failed" } : m) } : t));
@@ -234,19 +322,47 @@ export default function WhatsAppInboxPage() {
       <Navbar />
       <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 flex flex-col gap-4">
         {/* Connection banner */}
-        <div className={`flex items-center justify-between px-4 py-2.5 rounded-xl border text-xs font-bold ${isWhatsAppConnected ? "bg-emerald-50 border-emerald-300 text-emerald-900" : "bg-amber-50 border-amber-300 text-amber-900"}`}>
-          <div className="flex items-center gap-2">
+        <div className={`flex flex-wrap items-center justify-between gap-3 px-4 py-3 rounded-xl border text-xs font-bold ${isWhatsAppConnected ? "bg-emerald-50 border-emerald-300 text-emerald-900" : "bg-amber-50 border-amber-300 text-amber-900"}`}>
+          <div className="flex items-center gap-2.5">
             {isWhatsAppConnected ? (
               <>
-                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                <span>WhatsApp conectado{connectedPhone ? `: ${connectedPhone}` : ""} — Mensajes sincronizados{hasLiveMessages && <span className="ml-2 bg-red-500 text-white text-[9px] font-extrabold px-1.5 py-0.5 rounded-full animate-pulse">EN VIVO</span>}</span>
+                <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
+                <span>
+                  WhatsApp Vinculado{connectedPhone ? `: +${connectedPhone}` : ""} {baileysState.user?.name ? `(${baileysState.user.name})` : ""} — Sincronización en Tiempo Real
+                  {hasLiveMessages && <span className="ml-2 bg-red-500 text-white text-[9px] font-extrabold px-1.5 py-0.5 rounded-full animate-pulse">EN VIVO</span>}
+                </span>
                 {isPolling && <RefreshCw className="w-3 h-3 animate-spin text-emerald-600 ml-1" />}
               </>
             ) : (
-              <><WifiOff className="w-4 h-4 text-amber-600" /><span>WhatsApp no conectado — Configura la conexión para enviar mensajes reales</span></>
+              <>
+                <WifiOff className="w-4 h-4 text-amber-600 shrink-0" />
+                <span>WhatsApp no conectado — Escanea el código QR con tu celular para enviar y recibir mensajes reales.</span>
+              </>
             )}
           </div>
-          {!isWhatsAppConnected && <a href="/settings/whatsapp" className="underline font-extrabold text-amber-800 hover:text-amber-950">Conectar ahora →</a>}
+          <div className="flex items-center gap-2">
+            {!isWhatsAppConnected ? (
+              <>
+                <button
+                  onClick={() => setIsQrModalOpen(true)}
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-extrabold px-3.5 py-1.5 rounded-xl shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer"
+                >
+                  <QrCode className="w-4 h-4" />
+                  <span>Vincular por QR (Celular)</span>
+                </button>
+                <a href="/settings/whatsapp" className="text-xs underline font-extrabold text-amber-800 hover:text-amber-950 px-2 py-1">
+                  Meta Cloud API →
+                </a>
+              </>
+            ) : (
+              <button
+                onClick={handleDisconnectBaileys}
+                className="text-xs text-red-600 hover:text-red-800 underline font-bold cursor-pointer"
+              >
+                Desconectar WhatsApp
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Main layout */}
@@ -394,6 +510,115 @@ export default function WhatsAppInboxPage() {
                 <div className="pt-2 border-t border-slate-200 flex justify-end"><button onClick={() => setIsAuditModalOpen(false)} className="bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs px-5 py-2 rounded-xl cursor-pointer">Cerrar Informe</button></div>
               </div>
             ) : null}
+          </div>
+        </div>
+      )}
+
+      {/* WhatsApp QR Pairing Modal (Baileys Engine) */}
+      {isQrModalOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 space-y-5 shadow-2xl border border-slate-200 text-slate-900 animate-in fade-in zoom-in-95 duration-150">
+            {/* Header */}
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center">
+                  <QrCode className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-extrabold text-slate-900 text-sm">Vincular WhatsApp Web</h3>
+                  <p className="text-[11px] text-slate-500 font-medium">Escaneo directo con la cámara de WhatsApp</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsQrModalOpen(false)}
+                className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-500 flex items-center justify-center transition-colors cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* QR View & States */}
+            {baileysState.connected ? (
+              <div className="py-8 text-center space-y-4">
+                <div className="w-16 h-16 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto ring-8 ring-emerald-50">
+                  <CheckCircle2 className="w-9 h-9" />
+                </div>
+                <div>
+                  <h4 className="text-base font-extrabold text-slate-900">¡WhatsApp Vinculado con Éxito!</h4>
+                  <p className="text-xs text-slate-600 font-medium mt-1">
+                    Número conectado: <span className="font-bold text-emerald-700">+{baileysState.user?.phone}</span>
+                  </p>
+                  {baileysState.user?.name && (
+                    <p className="text-[11px] text-slate-400 mt-0.5">{baileysState.user.name}</p>
+                  )}
+                </div>
+                <button
+                  onClick={() => setIsQrModalOpen(false)}
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs px-6 py-2.5 rounded-xl shadow-xs transition-colors cursor-pointer w-full"
+                >
+                  Continuar al Chat
+                </button>
+              </div>
+            ) : baileysState.state === "server_offline" ? (
+              <div className="py-6 text-center space-y-4">
+                <div className="w-12 h-12 rounded-2xl bg-amber-100 text-amber-700 flex items-center justify-center mx-auto">
+                  <WifiOff className="w-6 h-6" />
+                </div>
+                <div className="space-y-1.5">
+                  <h4 className="text-sm font-extrabold text-slate-900">Servidor de WhatsApp Desconectado</h4>
+                  <p className="text-xs text-slate-600 font-medium leading-relaxed">
+                    Para habilitar el emparejamiento por QR, ejecuta el siguiente comando en tu terminal:
+                  </p>
+                  <code className="block bg-slate-900 text-emerald-400 font-mono text-xs px-3 py-2 rounded-xl mt-2 select-all">
+                    npm run whatsapp:server
+                  </code>
+                </div>
+                <button
+                  onClick={checkBaileys}
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs px-5 py-2.5 rounded-xl transition-colors cursor-pointer inline-flex items-center gap-1.5"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" /> Reintentar Conexión
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {/* QR Display */}
+                <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 flex flex-col items-center justify-center">
+                  {baileysState.qr ? (
+                    <div className="relative group">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={baileysState.qr}
+                        alt="Código QR de WhatsApp"
+                        className="w-60 h-60 rounded-xl shadow-xs bg-white p-2 border border-slate-100"
+                      />
+                      <div className="absolute inset-0 rounded-xl bg-slate-950/0 group-hover:bg-slate-950/5 transition-colors pointer-events-none" />
+                    </div>
+                  ) : (
+                    <div className="w-60 h-60 flex flex-col items-center justify-center gap-3 text-slate-400">
+                      <Loader2 className="w-8 h-8 animate-spin text-emerald-600" />
+                      <span className="text-xs font-bold text-slate-600">Generando código QR seguro...</span>
+                    </div>
+                  )}
+                  <span className="text-[10px] text-slate-400 font-bold mt-2 flex items-center gap-1">
+                    <RefreshCw className="w-3 h-3 animate-spin text-emerald-600" /> Auto-actualización criptográfica activa
+                  </span>
+                </div>
+
+                {/* Instructions */}
+                <div className="bg-emerald-50/60 border border-emerald-200/80 rounded-2xl p-3.5 text-xs text-emerald-950 space-y-1.5">
+                  <h5 className="font-extrabold flex items-center gap-1.5 text-emerald-900">
+                    <Smartphone className="w-4 h-4 text-emerald-700" /> Instrucciones desde tu teléfono:
+                  </h5>
+                  <ol className="list-decimal list-inside space-y-1 font-medium text-[11px] text-emerald-900/90 pl-1">
+                    <li>Abre <strong>WhatsApp</strong> en tu teléfono.</li>
+                    <li>Toca <strong>Menú</strong> (⋮ en Android) o <strong>Configuración</strong> (⚙️ en iPhone).</li>
+                    <li>Selecciona <strong>Dispositivos vinculados</strong> y luego <strong>Vincular un dispositivo</strong>.</li>
+                    <li>Apunta la cámara de WhatsApp hacia este código QR.</li>
+                  </ol>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}

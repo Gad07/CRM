@@ -166,23 +166,44 @@ export interface SalesRepLeaderboardItem {
   target_completion_percent: number;
 }
 
-export type UserRoleKey = 'super_admin' | 'sales_manager' | 'sales_rep' | 'erp_accountant';
+export type UserRoleKey = 'super_admin' | 'company_admin' | 'sales_manager' | 'sales_rep' | 'erp_accountant';
+
+export type PermissionKey =
+  | 'platform_super_admin'
+  | 'manage_company'
+  | 'manage_team'
+  | 'manage_billing'
+  | 'manage_pipelines'
+  | 'view_all_deals'
+  | 'edit_all_deals'
+  | 'delete_deals'
+  | 'view_own_deals'
+  | 'view_analytics'
+  | 'view_forecasting'
+  | 'manage_erp_invoices'
+  | 'manage_products'
+  | 'manage_automations'
+  | 'manage_whatsapp'
+  | 'access_ai_copilot';
 
 export interface RoleDefinition {
   key: UserRoleKey;
   name: string;
   description: string;
-  permissions: string[];
+  permissions: PermissionKey[];
 }
 
 export interface CRMUser {
   id: string;
+  tenant_id: string;
   name: string;
   email: string;
   role: UserRoleKey;
   avatar_color: string;
   is_active: boolean;
   last_active: string;
+  phone?: string;
+  accessible_tenants?: string[];
 }
 
 export interface DealAttachment {
@@ -195,6 +216,8 @@ export interface DealAttachment {
   uploaded_at: string;
 }
 
+export type SubscriptionPlanKey = 'starter' | 'pro' | 'enterprise';
+
 export interface CRMCompanyTenant {
   id: string;
   name: string;
@@ -202,9 +225,16 @@ export interface CRMCompanyTenant {
   industry: string;
   currency_symbol: string;
   currency_code: string;
+  plan: SubscriptionPlanKey;
+  plan_status: 'active' | 'trial' | 'past_due' | 'suspended';
+  max_users: number;
+  max_deals: number;
+  features: string[];
   address?: string;
   phone?: string;
   email?: string;
+  website?: string;
+  logo_url?: string;
   is_active: boolean;
   created_at: string;
 }

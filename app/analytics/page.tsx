@@ -2,6 +2,7 @@
 
 import React from 'react';
 import { Navbar } from '@/components/Navbar';
+import { RoleGuard } from '@/components/RoleGuard';
 import { useCRM } from '@/context/CRMContext';
 import { RevenueForecastingAndSLA } from '@/components/RevenueForecastingAndSLA';
 import { ERPInvoicingAndStock } from '@/components/ERPInvoicingAndStock';
@@ -22,10 +23,11 @@ export default function AnalyticsPage() {
   const winRate = deals.length > 0 ? Math.round((wonDeals.length / deals.length) * 100) : 0;
 
   return (
-    <div className="flex-1 flex flex-col min-h-screen bg-slate-50">
-      <Navbar />
+    <RoleGuard permission="view_analytics">
+      <div className="flex-1 flex flex-col min-h-screen bg-slate-50">
+        <Navbar />
 
-      <main className="p-4 sm:p-6 space-y-6 max-w-7xl mx-auto w-full flex-1">
+        <main className="p-4 sm:p-6 space-y-6 max-w-7xl mx-auto w-full flex-1">
         <div>
           <h1 className="text-xl font-bold text-slate-900 flex items-center gap-2">
             <BarChart3 className="w-5 h-5 text-indigo-600" /> Analítica Financiera, Pronóstico & ERP
@@ -105,5 +107,6 @@ export default function AnalyticsPage() {
         <ERPInvoicingAndStock />
       </main>
     </div>
-  );
+  </RoleGuard>
+);
 }

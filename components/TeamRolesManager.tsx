@@ -1,66 +1,62 @@
 'use client';
 
 import React, { useState } from 'react';
-import { ShieldCheck, Users, Plus, Trash2, Key, Check, ToggleLeft, ToggleRight, UserCheck, ShieldAlert, Sparkles } from 'lucide-react';
+import { ShieldCheck, Users, Plus, Trash2, Key, Check, ToggleLeft, ToggleRight, UserCheck, ShieldAlert, Sparkles, Building2 } from 'lucide-react';
 import { CRMUser, UserRoleKey, RoleDefinition } from '@/types/enterprise';
+import { SYSTEM_ROLE_DEFINITIONS } from '@/lib/permissions';
 
 export const SYSTEM_ROLES: RoleDefinition[] = [
-  {
-    key: 'super_admin',
-    name: 'Super Administrador',
-    description: 'Acceso total sin restricciones a todos los módulos, ajustes del sistema y facturación ERP.',
-    permissions: ['Ver Todo', 'Editar Todo', 'Eliminar Registros', 'Gestionar Usuarios & RBAC', 'Facturación ERP', 'Configuración Global']
-  },
-  {
-    key: 'sales_manager',
-    name: 'Gerente de Ventas',
-    description: 'Supervisión completa del embudo comercial, reasignación de negocios y analítica de rendimiento.',
-    permissions: ['Ver Todo el Embudo', 'Editar Etapas', 'Asignar Vendedores', 'Ver Analítica & Pronóstico', 'Aprobar Cotizaciones']
-  },
-  {
-    key: 'sales_rep',
-    name: 'Ejecutivo de Ventas',
-    description: 'Gestión de negocios asignados, tareas de seguimiento, minutas y comunicación con clientes.',
-    permissions: ['Ver Mis Negocios', 'Crear/Mover Negocios', 'Agendar Tareas', 'Enviar Plantillas WhatsApp', 'Generar Cotizaciones']
-  },
-  {
-    key: 'erp_accountant',
-    name: 'Contador / Facturación ERP',
-    description: 'Gestión del catálogo de productos, emisión de facturas electrónicas y control de cobros.',
-    permissions: ['Ver Facturas', 'Emitir Facturas FEL', 'Registrar Pagos', 'Control de Stock', 'Exportar Reportes']
-  }
+  SYSTEM_ROLE_DEFINITIONS.super_admin,
+  SYSTEM_ROLE_DEFINITIONS.company_admin,
+  SYSTEM_ROLE_DEFINITIONS.sales_manager,
+  SYSTEM_ROLE_DEFINITIONS.sales_rep,
+  SYSTEM_ROLE_DEFINITIONS.erp_accountant
 ];
 
 export const INITIAL_USERS: CRMUser[] = [
   {
     id: 'user-1',
+    tenant_id: 'tenant-1',
     name: 'Gabriel Palma',
     email: 'gabriel.palma@empresa.com',
     role: 'super_admin',
-    avatar_color: 'bg-indigo-600',
+    avatar_color: 'bg-indigo-700',
     is_active: true,
     last_active: 'Hace 2 minutos'
   },
   {
     id: 'user-2',
+    tenant_id: 'tenant-1',
     name: 'Valeria Morales',
     email: 'valeria.morales@empresa.com',
-    role: 'sales_manager',
+    role: 'company_admin',
     avatar_color: 'bg-purple-600',
     is_active: true,
     last_active: 'Hace 1 hora'
   },
   {
     id: 'user-3',
-    name: 'Roberto Gómez',
-    email: 'roberto.gomez@empresa.com',
+    tenant_id: 'tenant-1',
+    name: 'Alejandro Paz',
+    email: 'alejandro.paz@empresa.com',
+    role: 'sales_manager',
+    avatar_color: 'bg-blue-600',
+    is_active: true,
+    last_active: 'Hace 15 minutos'
+  },
+  {
+    id: 'user-4',
+    tenant_id: 'tenant-1',
+    name: 'Elena Rostro',
+    email: 'elena.rostro@empresa.com',
     role: 'sales_rep',
-    avatar_color: 'bg-emerald-600',
+    avatar_color: 'bg-pink-600',
     is_active: true,
     last_active: 'Ayer a las 17:45'
   },
   {
-    id: 'user-4',
+    id: 'user-5',
+    tenant_id: 'tenant-1',
     name: 'Carmen Silva',
     email: 'carmen.silva@empresa.com',
     role: 'erp_accountant',
@@ -85,6 +81,7 @@ export function TeamRolesManager() {
 
     const newUser: CRMUser = {
       id: `user-${Date.now()}`,
+      tenant_id: 'tenant-1',
       name: newName.trim(),
       email: newEmail.trim(),
       role: newRole,
@@ -120,7 +117,7 @@ export function TeamRolesManager() {
             <ShieldCheck className="w-5 h-5 text-indigo-600" /> Gestión de Usuarios, Equipos & Permisos (RBAC)
           </h2>
           <p className="text-xs text-slate-500 font-medium">
-            Control de acceso basado en roles para vendedores, gerentes y administradores
+            Control de acceso basado en roles para vendedores, gerentes, contadores y administradores
           </p>
         </div>
 
@@ -156,12 +153,12 @@ export function TeamRolesManager() {
         <div className="space-y-4">
           <div className="flex items-center justify-between">
             <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700">
-              Directorio de Usuarios del CRM/ERP ({users.length})
+              Directorio de Usuarios de la Empresa ({users.length})
             </h3>
 
             <button
               onClick={() => setIsAddUserOpen(!isAddUserOpen)}
-              className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold px-4 py-2 rounded-xl shadow-xs"
+              className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold px-4 py-2 rounded-xl shadow-xs cursor-pointer"
             >
               <Plus className="w-4 h-4" />
               <span>{isAddUserOpen ? 'Cancelar' : 'Invitar Nuevo Usuario'}</span>
@@ -219,7 +216,7 @@ export function TeamRolesManager() {
               <div className="flex justify-end pt-2">
                 <button
                   type="submit"
-                  className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs px-5 py-2 rounded-xl"
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs px-5 py-2 rounded-xl cursor-pointer"
                 >
                   + Enviar Invitación / Registrar
                 </button>
@@ -245,7 +242,7 @@ export function TeamRolesManager() {
                   <tr key={u.id} className="hover:bg-slate-50 transition-colors">
                     <td className="p-3">
                       <div className="flex items-center gap-2.5">
-                        <div className={`w-7 h-7 rounded-full ${u.avatar_color} text-white font-bold text-xs flex items-center justify-center`}>
+                        <div className={`w-7 h-7 rounded-lg ${u.avatar_color} text-white font-bold text-xs flex items-center justify-center shadow-xs`}>
                           {u.name.charAt(0)}
                         </div>
                         <span className="font-bold">{u.name}</span>
@@ -267,7 +264,7 @@ export function TeamRolesManager() {
                     </td>
                     <td className="p-3 text-slate-500">{u.last_active}</td>
                     <td className="p-3">
-                      <button onClick={() => toggleUserActive(u.id)} className="flex items-center gap-1.5">
+                      <button onClick={() => toggleUserActive(u.id)} className="flex items-center gap-1.5 cursor-pointer">
                         {u.is_active ? (
                           <span className="bg-emerald-100 text-emerald-800 text-[10px] font-extrabold px-2 py-0.5 rounded-full border border-emerald-300">
                             ACTIVO
@@ -280,7 +277,7 @@ export function TeamRolesManager() {
                       </button>
                     </td>
                     <td className="p-3 text-right">
-                      <button onClick={() => deleteUser(u.id)} className="text-slate-400 hover:text-red-600 p-1">
+                      <button onClick={() => deleteUser(u.id)} className="text-slate-400 hover:text-red-600 p-1 cursor-pointer">
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>
                     </td>
@@ -309,8 +306,8 @@ export function TeamRolesManager() {
                   </span>
                   <div className="flex flex-wrap gap-1.5">
                     {role.permissions.map(perm => (
-                      <span key={perm} className="bg-white border border-slate-200 text-indigo-700 font-bold text-[11px] px-2.5 py-1 rounded-lg flex items-center gap-1 shadow-2xs">
-                        <Check className="w-3 h-3 text-emerald-600" /> {perm}
+                      <span key={perm} className="bg-white border border-slate-200 text-indigo-700 font-bold text-[10px] px-2 py-0.5 rounded-lg flex items-center gap-1 shadow-2xs">
+                        <Check className="w-3 h-3 text-emerald-600" /> {perm.replace(/_/g, ' ')}
                       </span>
                     ))}
                   </div>
