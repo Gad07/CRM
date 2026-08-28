@@ -613,7 +613,7 @@ export default function WhatsAppInboxPage() {
   const [activeThreadId, setActiveThreadId] = useState<string>("");
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedRepFilter, setSelectedRepFilter] = useState<string>("all");
-  const [onlyCrmContactsFilter, setOnlyCrmContactsFilter] = useState(false);
+  const [onlyCrmContactsFilter, setOnlyCrmContactsFilter] = useState(true);
   const [messageInput, setMessageInput] = useState("");
   const [selectedAttachment, setSelectedAttachment] = useState<{
     file: File;
@@ -691,14 +691,14 @@ export default function WhatsAppInboxPage() {
     }
   }, []);
 
-  // Initialize real threads from persistent localStorage or mock only if disconnected
+  // Initialize real threads from persistent localStorage
   useEffect(() => {
     try {
       const rawReal = typeof window !== "undefined" ? localStorage.getItem("WA_REAL_SAVED_THREADS") : null;
       if (rawReal) {
         const parsed: WhatsAppThread[] = JSON.parse(rawReal);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          const unified = unifyWhatsAppThreads(parsed, connectedPhone);
+          const unified = unifyWhatsAppThreads(parsed, connectedPhone, undefined, data.contacts);
           setThreads(unified);
           if (!activeThreadId && unified[0]) setActiveThreadId(unified[0].id);
           return;
@@ -706,25 +706,8 @@ export default function WhatsAppInboxPage() {
       }
     } catch {}
 
-    const isConn = ls(WA_KEYS.IS_CONNECTED) === "true";
-    if (isConn) {
-      setThreads([]);
-      return;
-    }
-
-    if (!data.deals || data.deals.length === 0) return;
-    const built: WhatsAppThread[] = data.deals.map((deal, idx) => {
-      const contact = data.contacts.find((c) => c.id === deal.contact_id);
-      const phone = contact?.phone || (deal.custom_fields?.["phone"] as string) || (deal.custom_fields?.["telefono"] as string) || "";
-      const repName = (deal.custom_fields?.["assigned_rep"] as string) || (deal.custom_fields?.["vendedor"] as string) || data.settings?.company_name || "Equipo de Ventas";
-      const threadId = `chat-${deal.id}`;
-      const initialMessages: ChatMessage[] = [{ id: `m-${deal.id}-init`, sender: "contact", text: `Hola, me interesa ${deal.title}.`, timestamp: new Date(deal.created_at).toLocaleTimeString("es-GT", { hour: "2-digit", minute: "2-digit" }) }];
-      const lastMsg = initialMessages[initialMessages.length - 1];
-      return { id: threadId, contact_name: deal.contact_name || contact?.name || "Cliente Potencial", phone: formatPhone(phone), company_name: deal.company_name || "Empresa", deal_title: deal.title, deal_value: deal.value, deal_id: deal.id, unread_count: idx === 0 ? 1 : 0, last_message: lastMsg?.text || `Consulta sobre ${deal.title}`, last_time: lastMsg?.timestamp || "Reciente", assigned_rep: repName, response_delay_minutes: 0, messages: initialMessages, has_real_messages: false };
-    });
-    setThreads(built);
-    if (built.length > 0 && !activeThreadId) setActiveThreadId(built[0].id);
-  }, [data.deals, data.contacts, data.settings, connectedPhone]);
+    setThreads([]);
+  }, [data.contacts, connectedPhone]);
 
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [threads, activeThreadId]);
 
@@ -763,11 +746,12 @@ export default function WhatsAppInboxPage() {
 
   // Instantly re-apply contact names and update threads list whenever CRM contacts are added or deleted
   useEffect(() => {
+    fetchRealWhatsAppChats();
     setThreads((prev) => {
       if (prev.length === 0) return prev;
       return unifyWhatsAppThreads(prev, connectedPhone, undefined, data.contacts);
     });
-  }, [data.contacts, connectedPhone]);
+  }, [data.contacts, connectedPhone, fetchRealWhatsAppChats]);
 
   const pollForNewMessages = useCallback(async () => {
     if (isPolling) return;
@@ -1074,14 +1058,23 @@ export default function WhatsAppInboxPage() {
   };
 
   const uniqueReps = Array.from(new Set(threads.map((t) => t.assigned_rep)));
-  const registeredPhoneSet = new Set(data.contacts.map((c) => (c.phone ? c.phone.replace(/[^\d]/g, "") : "")));
+  const registeredPhoneSet = new Set<string>();
+  data.contacts.forEach((c) => {
+    if (c.phone) {
+      const cleanP = c.phone.replace(/[^\d]/g, "");
+      if (cleanP) {
+        registeredPhoneSet.add(cleanP);
+        if (cleanP.length >= 10) registeredPhoneSet.add(cleanP.slice(-10));
+      }
+    }
+  });
 
   const filteredThreads = threads.filter((t) => {
     const matchesSearch = t.contact_name.toLowerCase().includes(searchQuery.toLowerCase()) || t.company_name.toLowerCase().includes(searchQuery.toLowerCase()) || t.deal_title.toLowerCase().includes(searchQuery.toLowerCase()) || t.phone.toLowerCase().includes(searchQuery.toLowerCase());
     const matchesRep = selectedRepFilter === "all" || t.assigned_rep === selectedRepFilter;
     const cleanTPhone = t.phone.replace(/[^\d]/g, "");
     const isCrmContact = registeredPhoneSet.has(cleanTPhone) || (cleanTPhone.length >= 10 && registeredPhoneSet.has(cleanTPhone.slice(-10)));
-    const matchesContactFilter = !onlyCrmContactsFilter || isCrmContact || t.phone.includes("@g.us");
+    const matchesContactFilter = !onlyCrmContactsFilter || isCrmContact;
     return matchesSearch && matchesRep && matchesContactFilter;
   });
 

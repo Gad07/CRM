@@ -279,12 +279,17 @@ async function processMessage(m) {
   // Avoid duplicates & cap message history to prevent RAM exhaustion on Render (512MB limit)
   if (!chat.messages.some(existing => existing.id === msgObj.id)) {
     chat.messages.push(msgObj);
-    if (chat.messages.length > 40) {
-      chat.messages = chat.messages.slice(-40);
+    chat.messages.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+    if (chat.messages.length > 50) {
+      chat.messages = chat.messages.slice(-50);
     }
-    chat.last_message = text;
-    chat.last_time = new Date(timestamp).toLocaleTimeString('es-GT', { hour: '2-digit', minute: '2-digit' });
-    chat.timestamp = timestamp;
+    const latestMsg = chat.messages[chat.messages.length - 1];
+    if (latestMsg) {
+      chat.last_message = latestMsg.text || (latestMsg.media ? `[${latestMsg.media.type === 'image' ? 'Imagen' : 'Archivo'}]` : '');
+      const d = new Date(latestMsg.timestamp);
+      chat.last_time = !isNaN(d.getTime()) ? d.toLocaleTimeString('es-GT', { hour: '2-digit', minute: '2-digit' }) : latestMsg.timestamp;
+      chat.timestamp = latestMsg.timestamp;
+    }
     if (!fromMe) {
       chat.unread_count = (chat.unread_count || 0) + 1;
     }
