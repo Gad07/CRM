@@ -489,6 +489,33 @@ async function startBaileys() {
       }
     });
 
+    // Track Message Status Updates (Delivered, Read / Blue Checks)
+    sock.ev.on('messages.update', async (updates) => {
+      if (!updates || updates.length === 0) return;
+      for (const update of updates) {
+        const { key, update: msgUpdate } = update;
+        if (!key || !msgUpdate) continue;
+        const msgId = key.id;
+        const statusVal = msgUpdate.status;
+
+        // Map Baileys status number to string status
+        // 2: ERROR/PENDING, 3: SERVER_ACK/SENT, 4: DELIVERY_ACK/DELIVERED, 5: READ, 6: PLAYED
+        let newStatus = null;
+        if (statusVal === 3 || statusVal === 'SENT') newStatus = 'sent';
+        if (statusVal === 4 || statusVal === 'DELIVERED') newStatus = 'delivered';
+        if (statusVal === 5 || statusVal === 6 || statusVal === 'READ' || statusVal === 'PLAYED') newStatus = 'read';
+
+        if (newStatus) {
+          chatsMap.forEach((chat) => {
+            const m = chat.messages.find((msg) => msg.id === msgId);
+            if (m) {
+              m.status = newStatus;
+            }
+          });
+        }
+      }
+    });
+
   } catch (err) {
     console.error('❌ Error fatal iniciando Baileys:', err);
     connectionState.state = 'disconnected';
@@ -547,22 +574,21 @@ const server = http.createServer(async (req, res) => {
         });
       });
     });
-    res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ messages: allMsgs.slice(-200) }));
     return;
   }
 
-  // 4. POST /api/send: Send a real WhatsApp message
+  // 4. POST /api/send: Send a real WhatsApp message or media (images, documents)
   if (url.pathname === '/api/send' && req.method === 'POST') {
     let bodyStr = '';
     req.on('data', chunk => { bodyStr += chunk; });
     req.on('end', async () => {
       try {
-        const { to, message } = JSON.parse(bodyStr || '{}');
+        const { to, message, media } = JSON.parse(bodyStr || '{}');
 
-        if (!to || !message) {
+        if (!to || (!message && !media)) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'Faltan parámetros requeridos: to, message' }));
+          res.end(JSON.stringify({ error: 'Faltan parámetros requeridos: to, message o media' }));
           return;
         }
 
@@ -584,12 +610,10 @@ const server = http.createServer(async (req, res) => {
           const cleanPhone = jid.replace(/[^\d]/g, '');
           jid = `${cleanPhone}@s.whatsapp.net`;
 
-          // Resolve exact verified WhatsApp JID (critical for Mexico +52 / international)
           try {
             const results = await sock.onWhatsApp(cleanPhone);
             if (results && results.length > 0 && results[0].exists && results[0].jid) {
               jid = results[0].jid;
-              console.log(`🔎 [WhatsApp JID Resuelto]: ${cleanPhone} -> ${jid}`);
             } else if (results && results.length > 0 && results[0].jid) {
               jid = results[0].jid;
             }
@@ -598,15 +622,42 @@ const server = http.createServer(async (req, res) => {
           }
         }
 
-        console.log(`🚀 [WhatsApp Baileys Enviando] A ${jid}: "${message}"`);
-        const sent = await sock.sendMessage(jid, { text: message });
+        console.log(`🚀 [WhatsApp Baileys Enviando] A ${jid}: "${message || (media ? media.type : '')}"`);
+
+        let sent = null;
+        let sentMedia = null;
+
+        if (media && media.base64) {
+          const buffer = Buffer.from(media.base64, 'base64');
+          if (media.type === 'image') {
+            sent = await sock.sendMessage(jid, { image: buffer, caption: message || media.caption || '' });
+            sentMedia = { type: 'image', thumbnail: `data:${media.mimetype || 'image/jpeg'};base64,${media.base64}`, caption: message };
+          } else if (media.type === 'document') {
+            sent = await sock.sendMessage(jid, {
+              document: buffer,
+              fileName: media.fileName || 'archivo',
+              mimetype: media.mimetype || 'application/octet-stream',
+              caption: message || ''
+            });
+            sentMedia = {
+              type: 'document',
+              fileName: media.fileName || 'Archivo',
+              docUrl: `data:${media.mimetype || 'application/octet-stream'};base64,${media.base64}`
+            };
+          } else {
+            sent = await sock.sendMessage(jid, { text: message || '' });
+          }
+        } else {
+          sent = await sock.sendMessage(jid, { text: message });
+        }
 
         const cleanPhone = jid.replace('@s.whatsapp.net', '').replace('@g.us', '');
         const now = new Date().toISOString();
         const sentMsg = {
           id: sent?.key?.id || `msg-${Date.now()}`,
           sender: 'agent',
-          text: message,
+          text: message || (media ? `[${media.type === 'image' ? 'Imagen' : 'Archivo'} enviado]` : ''),
+          media: sentMedia,
           timestamp: now,
           status: 'sent',
           isReal: true
@@ -623,7 +674,7 @@ const server = http.createServer(async (req, res) => {
             deal_value: 0,
             deal_id: `wa-${cleanPhone}`,
             unread_count: 0,
-            last_message: message,
+            last_message: sentMsg.text,
             last_time: new Date().toLocaleTimeString('es-GT', { hour: '2-digit', minute: '2-digit' }),
             assigned_rep: 'Tú (CRM)',
             response_delay_minutes: 0,
@@ -634,7 +685,7 @@ const server = http.createServer(async (req, res) => {
           chatsMap.set(cleanPhone, chat);
         }
         chat.messages.push(sentMsg);
-        chat.last_message = message;
+        chat.last_message = sentMsg.text;
         chat.last_time = new Date().toLocaleTimeString('es-GT', { hour: '2-digit', minute: '2-digit' });
         chat.timestamp = now;
 
@@ -650,6 +701,50 @@ const server = http.createServer(async (req, res) => {
         console.error('Error enviando mensaje vía Baileys:', err);
         res.writeHead(500, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: err.message || 'Error al enviar mensaje' }));
+      }
+    });
+    return;
+  }
+
+  // 5. POST /api/read: Mark chat messages as read on WhatsApp
+  if (url.pathname === '/api/read' && req.method === 'POST') {
+    let bodyStr = '';
+    req.on('data', chunk => { bodyStr += chunk; });
+    req.on('end', async () => {
+      try {
+        const { to } = JSON.parse(bodyStr || '{}');
+        if (!to || !sock) {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: false }));
+          return;
+        }
+
+        const cleanPhone = String(to).replace(/[^\d]/g, '');
+        const chat = chatsMap.get(cleanPhone);
+        if (chat) {
+          chat.unread_count = 0;
+          // Collect unread message keys to send read receipts
+          const keysToRead = chat.messages
+            .filter(m => m.sender === 'contact' && m.status !== 'read')
+            .map(m => ({ remoteJid: `${cleanPhone}@s.whatsapp.net`, id: m.id, fromMe: false }));
+
+          if (keysToRead.length > 0) {
+            try {
+              await sock.readMessages(keysToRead);
+            } catch (e) {
+              console.warn('readMessages error:', e.message);
+            }
+          }
+          chat.messages.forEach(m => {
+            if (m.sender === 'contact') m.status = 'read';
+          });
+        }
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true }));
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
       }
     });
     return;

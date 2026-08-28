@@ -8,7 +8,7 @@ import {
   Mic, MapPin, Download, ExternalLink, Play,
   Tag, StickyNote, ClipboardList, CheckSquare, Square, Trash2,
   PlusCircle, ChevronRight, ChevronLeft, TrendingUp, Clock, UserCheck,
-  Briefcase, Calendar, Lightbulb, Flame
+  Briefcase, Calendar, Lightbulb, Flame, Paperclip, ArrowUpRight
 } from "lucide-react";
 import { useCRM } from "@/context/CRMContext";
 import { Navbar } from "@/components/Navbar";
@@ -64,8 +64,8 @@ const STAGE_LABELS: Record<DealStage, string> = {
   prospecto: "Prospecto",
   interesado: "Interesado",
   cotizacion: "Cotización",
-  cerrado: "Cerrado ✅",
-  perdido: "Perdido ❌",
+  cerrado: "Cerrado",
+  perdido: "Perdido",
 };
 
 const STAGE_COLORS: Record<DealStage, string> = {
@@ -77,11 +77,11 @@ const STAGE_COLORS: Record<DealStage, string> = {
 };
 
 const TAG_LABELS: Record<ContactTag, string> = {
-  vip: "⭐ VIP",
-  cliente: "💼 Cliente",
-  prospecto: "🔍 Prospecto",
-  frio: "❄️ Frío",
-  urgente: "🔥 Urgente",
+  vip: "VIP",
+  cliente: "Cliente",
+  prospecto: "Prospecto",
+  frio: "Frío",
+  urgente: "Urgente",
 };
 
 const TAG_COLORS: Record<ContactTag, string> = {
@@ -295,6 +295,7 @@ function CrmSidePanel({
   aiSummary,
   isLoadingAi,
   onRequestAiSummary,
+  onCreateCrmDeal,
 }: {
   thread: WhatsAppThread;
   data: CrmContactData;
@@ -302,6 +303,7 @@ function CrmSidePanel({
   aiSummary: string | null;
   isLoadingAi: boolean;
   onRequestAiSummary: () => void;
+  onCreateCrmDeal: () => void;
 }) {
   const [noteInput, setNoteInput] = useState("");
   const [taskInput, setTaskInput] = useState("");
@@ -430,13 +432,30 @@ function CrmSidePanel({
               <p className="text-[9px] text-slate-400 mt-0.5">Se guarda automáticamente</p>
             </div>
 
-            {/* Contact info */}
-            <div className="bg-slate-50 border border-slate-200 rounded-xl p-2.5 space-y-1.5">
-              <p className="text-[10px] font-extrabold text-slate-500 uppercase tracking-wider flex items-center gap-1"><UserCheck className="w-3 h-3" />Info</p>
+            {/* Contact info & CRM Module linking */}
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-2.5 space-y-2">
+              <p className="text-[10px] font-extrabold text-slate-500 uppercase tracking-wider flex items-center gap-1"><UserCheck className="w-3 h-3" />Información del CRM</p>
               <div className="space-y-1 text-[11px]">
                 <div className="flex items-center gap-1.5"><Phone className="w-3 h-3 text-slate-400" /><span className="font-medium text-slate-700">{thread.phone}</span></div>
                 <div className="flex items-center gap-1.5"><Briefcase className="w-3 h-3 text-slate-400" /><span className="font-medium text-slate-700 truncate">{thread.company_name}</span></div>
                 {thread.deal_title && <div className="flex items-center gap-1.5"><TrendingUp className="w-3 h-3 text-slate-400" /><span className="font-medium text-slate-700 truncate">{thread.deal_title}</span></div>}
+              </div>
+              
+              <div className="pt-1 border-t border-slate-200 space-y-1">
+                <a
+                  href="/pipeline"
+                  className="w-full bg-violet-600 hover:bg-violet-700 text-white font-bold text-[11px] py-1.5 px-3 rounded-lg flex items-center justify-center gap-1 transition-colors"
+                >
+                  <span>Ver Pipeline de CRM</span>
+                  <ArrowUpRight className="w-3.5 h-3.5" />
+                </a>
+                <button
+                  onClick={onCreateCrmDeal}
+                  className="w-full bg-white hover:bg-violet-50 text-violet-700 border border-violet-300 font-bold text-[11px] py-1.5 px-3 rounded-lg flex items-center justify-center gap-1 transition-colors cursor-pointer"
+                >
+                  <PlusCircle className="w-3.5 h-3.5" />
+                  <span>Crear Oportunidad</span>
+                </button>
               </div>
             </div>
           </div>
@@ -569,12 +588,20 @@ function CrmSidePanel({
 }
 
 export default function WhatsAppInboxPage() {
-  const { data, templates, renderTemplateText, formatCurrency } = useCRM();
+  const { data, addDeal, addContact, templates, renderTemplateText, formatCurrency } = useCRM();
   const [threads, setThreads] = useState<WhatsAppThread[]>([]);
   const [activeThreadId, setActiveThreadId] = useState<string>("");
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedRepFilter, setSelectedRepFilter] = useState<string>("all");
+  const [onlyCrmContactsFilter, setOnlyCrmContactsFilter] = useState(false);
   const [messageInput, setMessageInput] = useState("");
+  const [selectedAttachment, setSelectedAttachment] = useState<{
+    file: File;
+    base64: string;
+    type: "image" | "document";
+    previewUrl?: string;
+  } | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [selectedTemplateId, setSelectedTemplateId] = useState("");
   const [isAiSuggesting, setIsAiSuggesting] = useState(false);
   const [isSending, setIsSending] = useState(false);
@@ -702,6 +729,23 @@ export default function WhatsAppInboxPage() {
         const lidMap: Record<string, string> = resData.lidMap || {};
         const unified = unifyWhatsAppThreads(resData.chats, connectedPhone, lidMap);
 
+        // Auto-sync contacts with CRM Contacts database so every WhatsApp thread is a CRM contact
+        const existingPhones = new Set(data.contacts.map((c) => (c.phone ? c.phone.replace(/[^\d]/g, "") : "")));
+        unified.forEach((t) => {
+          const cleanP = t.phone.replace(/[^\d]/g, "");
+          if (cleanP && !existingPhones.has(cleanP) && !t.phone.includes("@g.us")) {
+            existingPhones.add(cleanP);
+            addContact({
+              name: t.contact_name,
+              email: `${cleanP}@whatsapp.com`,
+              phone: t.phone,
+              company_name: t.company_name || "WhatsApp Contact",
+              role: "Prospecto",
+              custom_fields: {},
+            });
+          }
+        });
+
         setThreads(unified);
         if (typeof window !== "undefined") {
           localStorage.setItem("WA_REAL_SAVED_THREADS", JSON.stringify(unified));
@@ -712,7 +756,7 @@ export default function WhatsAppInboxPage() {
         });
       }
     } catch {}
-  }, [connectedPhone]);
+  }, [connectedPhone, data.contacts, addContact]);
 
   const pollForNewMessages = useCallback(async () => {
     if (isPolling) return;
@@ -833,24 +877,131 @@ export default function WhatsAppInboxPage() {
     } catch {}
   };
 
+  // Mark chat messages as read on server & WhatsApp
+  const markChatAsRead = useCallback(async (phone: string) => {
+    if (!phone) return;
+    try {
+      await fetch("/api/whatsapp/baileys", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "read", to: phone }),
+      });
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    if (activeThread?.phone) {
+      markChatAsRead(activeThread.phone);
+    }
+  }, [activeThreadId, activeThread?.phone, markChatAsRead]);
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const resultStr = reader.result as string;
+      const base64 = resultStr.split(",")[1] || "";
+      const isImage = file.type.startsWith("image/");
+
+      setSelectedAttachment({
+        file,
+        base64,
+        type: isImage ? "image" : "document",
+        previewUrl: isImage ? resultStr : undefined,
+      });
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleCreateCrmDeal = () => {
+    if (!activeThread) return;
+    const cleanPhone = activeThread.phone.replace(/[^\d]/g, "");
+    
+    // Add contact if not present
+    let contact = data.contacts.find(c => c.phone && c.phone.replace(/[^\d]/g, "") === cleanPhone);
+    if (!contact) {
+      addContact({
+        name: activeThread.contact_name,
+        email: `${cleanPhone}@whatsapp.com`,
+        phone: activeThread.phone,
+        company_name: activeThread.company_name || "WhatsApp Contact",
+        role: "Prospecto",
+        custom_fields: {}
+      });
+    }
+
+    const firstPipeline = data.pipelines[0];
+    const firstStage = firstPipeline?.stages[0];
+
+    addDeal({
+      title: `Oportunidad con ${activeThread.contact_name}`,
+      value: activeThread.deal_value || 1000,
+      contact_name: activeThread.contact_name,
+      company_name: activeThread.company_name || "Empresa",
+      currency: "$",
+      pipeline_id: firstPipeline?.id || "p1",
+      stage_id: firstStage?.id || "s1",
+      priority: "medium",
+      tags: ["WhatsApp"],
+      custom_fields: { phone: activeThread.phone },
+      order_index: 0,
+      status: "open"
+    });
+    alert(`Oportunidad creada exitosamente en el Pipeline para ${activeThread.contact_name}`);
+  };
+
   const handleSendMessage = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (!messageInput.trim() || !activeThread) return;
+    if ((!messageInput.trim() && !selectedAttachment) || !activeThread) return;
     const optimisticId = `msg-${Date.now()}`;
-    const optimisticMsg: ChatMessage = { id: optimisticId, sender: "agent", text: messageInput.trim(), timestamp: new Date().toLocaleTimeString("es-GT", { hour: "2-digit", minute: "2-digit" }), status: "sending" };
-    setThreads((prev) => prev.map((t) => t.id === activeThread.id ? { ...t, last_message: optimisticMsg.text, last_time: optimisticMsg.timestamp, unread_count: 0, messages: [...t.messages, optimisticMsg] } : t));
+    
+    const sentMediaObj = selectedAttachment ? {
+      type: selectedAttachment.type,
+      thumbnail: selectedAttachment.previewUrl || null,
+      docUrl: selectedAttachment.type === "document" ? `data:${selectedAttachment.file.type};base64,${selectedAttachment.base64}` : null,
+      fileName: selectedAttachment.file.name,
+      fileSize: selectedAttachment.file.size
+    } : null;
+
+    const optimisticMsg: ChatMessage = {
+      id: optimisticId,
+      sender: "agent",
+      text: messageInput.trim(),
+      media: sentMediaObj,
+      timestamp: new Date().toLocaleTimeString("es-GT", { hour: "2-digit", minute: "2-digit" }),
+      status: "sending"
+    };
+
+    setThreads((prev) => prev.map((t) => t.id === activeThread.id ? { ...t, last_message: optimisticMsg.text || (sentMediaObj ? `[${sentMediaObj.type === "image" ? "Imagen" : "Archivo"}]` : ""), last_time: optimisticMsg.timestamp, unread_count: 0, messages: [...t.messages, optimisticMsg] } : t));
+    
     const sentText = messageInput.trim();
-    setMessageInput(""); setSelectedTemplateId(""); setSendError(null); setIsSending(true);
+    const currentAttachment = selectedAttachment;
+
+    setMessageInput("");
+    setSelectedAttachment(null);
+    setSelectedTemplateId("");
+    setSendError(null);
+    setIsSending(true);
+
     try {
       let finalStatus: ChatMessage["status"] = "sent";
       let messageId = optimisticId;
+
+      const mediaPayload = currentAttachment ? {
+        type: currentAttachment.type,
+        base64: currentAttachment.base64,
+        fileName: currentAttachment.file.name,
+        mimetype: currentAttachment.file.type
+      } : null;
 
       // Check if Baileys real socket is connected
       if (baileysState.connected) {
         const res = await fetch("/api/whatsapp/baileys", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action: "send", to: activeThread.phone, message: sentText })
+          body: JSON.stringify({ action: "send", to: activeThread.phone, message: sentText, media: mediaPayload })
         });
         const resData = await res.json();
         if (!res.ok || !resData.success) {
@@ -860,7 +1011,7 @@ export default function WhatsAppInboxPage() {
           messageId = resData.message_id || optimisticId;
         }
       } else {
-        // Fallback to Meta Cloud API or Twilio or simulation
+        // Fallback
         const provider = ls(WA_KEYS.PROVIDER) || "meta";
         const body: Record<string, any> = { to: activeThread.phone, message: sentText, threadId: activeThread.phone.replace(/[^\d]/g, "") || activeThread.id, fromPhone: ls(WA_KEYS.USER_PHONE) || "CRM" };
         if (provider === "meta") { body.phoneNumberId = ls(WA_KEYS.PHONE_ID); body.accessToken = ls(WA_KEYS.ACCESS_TOKEN); }
@@ -912,11 +1063,15 @@ export default function WhatsAppInboxPage() {
   };
 
   const uniqueReps = Array.from(new Set(threads.map((t) => t.assigned_rep)));
+  const registeredPhoneSet = new Set(data.contacts.map((c) => (c.phone ? c.phone.replace(/[^\d]/g, "") : "")));
+
   const filteredThreads = threads.filter((t) => {
-    // If WhatsApp is connected, remove any mock dummy deal that has no real messages
     const matchesSearch = t.contact_name.toLowerCase().includes(searchQuery.toLowerCase()) || t.company_name.toLowerCase().includes(searchQuery.toLowerCase()) || t.deal_title.toLowerCase().includes(searchQuery.toLowerCase()) || t.phone.toLowerCase().includes(searchQuery.toLowerCase());
     const matchesRep = selectedRepFilter === "all" || t.assigned_rep === selectedRepFilter;
-    return matchesSearch && matchesRep;
+    const cleanTPhone = t.phone.replace(/[^\d]/g, "");
+    const isCrmContact = registeredPhoneSet.has(cleanTPhone) || (cleanTPhone.length >= 10 && registeredPhoneSet.has(cleanTPhone.slice(-10)));
+    const matchesContactFilter = !onlyCrmContactsFilter || isCrmContact || t.phone.includes("@g.us");
+    return matchesSearch && matchesRep && matchesContactFilter;
   });
 
   return (
@@ -990,6 +1145,21 @@ export default function WhatsAppInboxPage() {
               <div className="relative mb-2">
                 <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
                 <input type="text" placeholder="Buscar contacto, teléfono..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="w-full bg-slate-100 border border-slate-200 rounded-xl pl-9 pr-3 py-1.5 text-xs text-slate-900 font-medium focus:ring-2 focus:ring-indigo-600 focus:outline-none" />
+              </div>
+              <div className="flex items-center gap-1 mb-2">
+                <button
+                  onClick={() => setOnlyCrmContactsFilter(false)}
+                  className={`text-[10px] font-extrabold px-2.5 py-1 rounded-lg border transition-colors cursor-pointer ${!onlyCrmContactsFilter ? "bg-indigo-600 text-white border-indigo-700 shadow-2xs" : "bg-slate-100 text-slate-600 border-slate-200 hover:bg-slate-200"}`}
+                >
+                  Todos ({threads.length})
+                </button>
+                <button
+                  onClick={() => setOnlyCrmContactsFilter(true)}
+                  className={`text-[10px] font-extrabold px-2.5 py-1 rounded-lg border transition-colors cursor-pointer flex items-center gap-1 ${onlyCrmContactsFilter ? "bg-indigo-600 text-white border-indigo-700 shadow-2xs" : "bg-slate-100 text-slate-600 border-slate-200 hover:bg-slate-200"}`}
+                >
+                  <Users className="w-3 h-3 text-indigo-400" />
+                  Solo Contactos CRM
+                </button>
               </div>
               {uniqueReps.length > 1 && (
                 <div className="flex items-center gap-1.5 bg-slate-100 px-2.5 py-1.5 rounded-xl border border-slate-200 text-xs font-bold">
@@ -1167,9 +1337,11 @@ export default function WhatsAppInboxPage() {
                     <div className="flex items-center gap-1 text-[10px] text-slate-400 mt-1 px-1">
                       <span>{msg.timestamp}</span>
                       {msg.sender === "agent" && msg.status === "sending" && <Loader2 className="w-3 h-3 animate-spin text-slate-400" />}
-                      {msg.sender === "agent" && msg.status === "sent" && <CheckCheck className="w-3 h-3 text-indigo-600" />}
+                      {msg.sender === "agent" && msg.status === "sent" && <span title="Enviado"><CheckCheck className="w-3.5 h-3.5 text-slate-400" /></span>}
+                      {msg.sender === "agent" && msg.status === "delivered" && <span title="Entregado"><CheckCheck className="w-3.5 h-3.5 text-slate-400" /></span>}
+                      {msg.sender === "agent" && msg.status === "read" && <span title="Leído (Check azul)"><CheckCheck className="w-3.5 h-3.5 text-blue-500 font-bold" /></span>}
                       {msg.sender === "agent" && msg.status === "failed" && <span className="text-red-500 font-bold">error</span>}
-                      {msg.isReal && <span className="text-emerald-600 font-bold">real</span>}
+                      {msg.isReal && <span className="text-emerald-600 font-bold ml-0.5">real</span>}
                     </div>
                   </div>
                 ))}
@@ -1187,10 +1359,46 @@ export default function WhatsAppInboxPage() {
                     <span>{isAiSuggesting ? "Generando..." : "Sugerir con Gemini IA"}</span>
                   </button>
                 </div>
+                {/* File attachment preview badge */}
+                {selectedAttachment && (
+                  <div className="flex items-center justify-between gap-2 bg-indigo-50 border border-indigo-200 p-2 rounded-xl text-xs text-indigo-900">
+                    <div className="flex items-center gap-2 min-w-0">
+                      {selectedAttachment.previewUrl ? (
+                        /* eslint-disable-next-line @next/next/no-img-element */
+                        <img src={selectedAttachment.previewUrl} alt="Preview" className="w-8 h-8 rounded-lg object-cover border border-indigo-200" />
+                      ) : (
+                        <FileText className="w-5 h-5 text-indigo-600 shrink-0" />
+                      )}
+                      <span className="truncate font-bold text-xs">{selectedAttachment.file.name}</span>
+                    </div>
+                    <button onClick={() => setSelectedAttachment(null)} className="text-slate-400 hover:text-red-600 p-1 cursor-pointer">
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                )}
+
                 {sendError && <p className="text-[11px] text-red-700 font-bold bg-red-50 border border-red-200 px-3 py-2 rounded-xl">❌ {sendError}</p>}
+                
                 <form onSubmit={handleSendMessage} className="flex items-center gap-2">
+                  <input
+                    type="file"
+                    ref={fileInputRef}
+                    className="hidden"
+                    accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx,.txt"
+                    onChange={handleFileSelect}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    title="Adjuntar imagen o documento"
+                    className="p-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 transition-colors cursor-pointer shrink-0"
+                  >
+                    <Paperclip className="w-4 h-4" />
+                  </button>
+                  
                   <input type="text" placeholder={isWhatsAppConnected ? "Escribe un mensaje..." : "Conecta WhatsApp en Ajustes para enviar mensajes reales..."} value={messageInput} onChange={(e) => setMessageInput(e.target.value)} className="flex-1 bg-slate-50 border border-slate-300 rounded-xl px-4 py-2.5 text-xs text-slate-900 font-medium focus:ring-2 focus:ring-indigo-600 focus:outline-none" />
-                  <button type="submit" disabled={!messageInput.trim() || isSending} className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 text-white font-bold text-xs px-5 py-2.5 rounded-xl transition-colors flex items-center gap-1.5 cursor-pointer shadow-xs">
+                  
+                  <button type="submit" disabled={(!messageInput.trim() && !selectedAttachment) || isSending} className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 text-white font-bold text-xs px-5 py-2.5 rounded-xl transition-colors flex items-center gap-1.5 cursor-pointer shadow-xs">
                     {isSending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
                     <span>{isSending ? "Enviando..." : "Enviar"}</span>
                   </button>
@@ -1216,6 +1424,7 @@ export default function WhatsAppInboxPage() {
               aiSummary={crmAiSummary}
               isLoadingAi={isCrmAiLoading}
               onRequestAiSummary={handleCrmAiSummary}
+              onCreateCrmDeal={handleCreateCrmDeal}
             />
           )}
         </div>

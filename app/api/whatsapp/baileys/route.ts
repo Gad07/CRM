@@ -89,10 +89,19 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: true });
     }
 
-    if (action === "send" || (!action && to && message)) {
+    if (action === "read") {
+      const result = await tryBaileysRequest("/api/read", {
+        method: "POST",
+        body: JSON.stringify({ to }),
+      });
+      if (result.ok && result.data) return NextResponse.json(result.data);
+      return NextResponse.json({ success: true });
+    }
+
+    if (action === "send" || (!action && to && (message || body.media))) {
       const result = await tryBaileysRequest("/api/send", {
         method: "POST",
-        body: JSON.stringify({ to, message }),
+        body: JSON.stringify({ to, message, media: body.media }),
       });
       if (result.ok && result.data) {
         return NextResponse.json(result.data);
