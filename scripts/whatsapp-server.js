@@ -183,7 +183,11 @@ async function startBaileys() {
       auth: state,
       printQRInTerminal: true,
       logger: pino({ level: 'silent' }),
-      browser: Browsers.macOS('Desktop'),
+      browser: Browsers.ubuntu('Chrome'),
+      connectTimeoutMs: 60000,
+      defaultQueryTimeoutMs: 60000,
+      keepAliveIntervalMs: 25000,
+      retryRequestDelayMs: 1000,
       syncFullHistory: true
     });
 
