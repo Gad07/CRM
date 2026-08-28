@@ -1,10 +1,10 @@
 'use client';
 
 import React, { useState } from 'react';
-import { X, Trash2, Printer, FileText, MessageSquare } from 'lucide-react';
+import { X, Trash2, Printer, FileText, MessageSquare, Receipt, CheckCircle, Clock } from 'lucide-react';
 import { useCRM } from '@/context/CRMContext';
 import { Deal } from '@/types/crm';
-import { QuoteLineItem } from '@/types/enterprise';
+import { QuoteLineItem, Quotation } from '@/types/enterprise';
 
 interface QuotationBuilderProps {
   deal: Deal;
@@ -13,13 +13,15 @@ interface QuotationBuilderProps {
 }
 
 export function QuotationBuilder({ deal, isOpen, onClose }: QuotationBuilderProps) {
-  const { data, products, saveQuotation, formatCurrency } = useCRM();
+  const { data, products, saveQuotation, createInvoiceFromQuote, formatCurrency, quotations } = useCRM();
 
-  const existingQuote = useCRM().quotations.find(q => q.deal_id === deal.id);
+  const existingQuote = quotations.find(q => q.deal_id === deal.id);
 
   const [quoteNumber, setQuoteNumber] = useState(
     existingQuote?.quote_number || `COT-${Math.floor(1000 + Math.random() * 9000)}`
   );
+
+  const [status, setStatus] = useState<Quotation['status']>(existingQuote?.status || 'sent');
 
   const [lineItems, setLineItems] = useState<QuoteLineItem[]>(
     existingQuote?.line_items || [
@@ -83,24 +85,35 @@ export function QuotationBuilder({ deal, isOpen, onClose }: QuotationBuilderProp
   const taxSum = lineItems.reduce((s, i) => s + (i.total - i.subtotal), 0);
   const grandTotal = subtotalSum + taxSum;
 
+  const buildQuoteObject = (): Quotation => ({
+    id: existingQuote?.id || `quote-${Date.now()}`,
+    quote_number: quoteNumber,
+    deal_id: deal.id,
+    deal_title: deal.title,
+    customer_name: deal.contact_name || 'Cliente Principal',
+    customer_company: deal.company_name,
+    date_issued: new Date().toISOString().split('T')[0],
+    valid_until: new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
+    line_items: lineItems,
+    subtotal: subtotalSum,
+    tax_total: taxSum,
+    discount_total: 0,
+    grand_total: grandTotal,
+    notes,
+    status
+  });
+
   const handleSave = () => {
-    saveQuotation({
-      quote_number: quoteNumber,
-      deal_id: deal.id,
-      deal_title: deal.title,
-      customer_name: deal.contact_name || 'Cliente Principal',
-      customer_company: deal.company_name,
-      date_issued: new Date().toISOString().split('T')[0],
-      valid_until: new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
-      line_items: lineItems,
-      subtotal: subtotalSum,
-      tax_total: taxSum,
-      discount_total: 0,
-      grand_total: grandTotal,
-      notes,
-      status: 'sent'
-    });
+    saveQuotation(buildQuoteObject());
     alert('¡Cotización guardada exitosamente y valor del negocio actualizado!');
+    onClose();
+  };
+
+  const handleConvertToInvoice = () => {
+    const quote = buildQuoteObject();
+    saveQuotation({ ...quote, status: 'accepted' });
+    createInvoiceFromQuote(quote);
+    alert(`¡Factura Electrónica FEL generada con éxito en el Módulo ERP para la cotización ${quote.quote_number}!`);
     onClose();
   };
 
@@ -113,7 +126,7 @@ export function QuotationBuilder({ deal, isOpen, onClose }: QuotationBuilderProp
       .map(i => `• *${i.product_name}* (x${i.quantity}): ${formatCurrency(i.total)}`)
       .join('\n');
 
-    const message = `📋 *COTIZACIÓN OFICIAL: ${quoteNumber}*\n\n*Cliente:* ${deal.contact_name || 'Cliente'}\n*Empresa:* ${deal.company_name || 'N/A'}\n\n*Detalle de Ítems:*\n${itemsList}\n\n*TOTAL:* ${formatCurrency(grandTotal)}\n\n_Notas:_ ${notes}\n\nGracias por su confianza.`;
+    const message = `📋 *COTIZACIÓN OFICIAL: ${quoteNumber}*\n\n*Cliente:* ${deal.contact_name || 'Cliente'}\n*Empresa:* ${deal.company_name || 'N/A'}\n\n*Detalle de Ítems:*\n${itemsList}\n\n*TOTAL:* ${formatCurrency(grandTotal)}\n\n_Notas:_ ${notes}\n\nGracias por su preferencia.`;
 
     const encoded = encodeURIComponent(message);
     window.open(`https://wa.me/?text=${encoded}`, '_blank');
@@ -125,15 +138,25 @@ export function QuotationBuilder({ deal, isOpen, onClose }: QuotationBuilderProp
         {/* Modal Header */}
         <div className="p-5 border-b border-slate-200 bg-slate-50 flex items-center justify-between print:hidden">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-indigo-600 flex items-center justify-center">
+            <div className="w-10 h-10 rounded-xl bg-indigo-600 flex items-center justify-center shadow-xs">
               <FileText className="w-5 h-5 text-white" />
             </div>
             <div>
               <h2 className="text-lg font-bold text-slate-900">Generador de Cotización Comercial (Quotes)</h2>
-              <p className="text-xs text-slate-500 font-medium">Negocio: <span className="text-indigo-700 font-bold">{deal.title}</span></p>
+              <p className="text-xs text-slate-500 font-medium">
+                Negocio: <span className="text-indigo-700 font-bold">{deal.title}</span>
+              </p>
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <button
+              onClick={handleConvertToInvoice}
+              className="flex items-center gap-1.5 text-xs text-purple-800 font-bold bg-purple-100 hover:bg-purple-200 border border-purple-300 px-3 py-1.5 rounded-lg transition-colors cursor-pointer"
+              title="Emitir Factura Electrónica FEL"
+            >
+              <Receipt className="w-4 h-4 text-purple-600" />
+              <span>Facturar en ERP (FEL)</span>
+            </button>
             <button
               onClick={handleSendWhatsApp}
               className="flex items-center gap-1.5 text-xs text-emerald-800 font-bold bg-emerald-100 hover:bg-emerald-200 border border-emerald-300 px-3 py-1.5 rounded-lg transition-colors cursor-pointer"
@@ -141,7 +164,10 @@ export function QuotationBuilder({ deal, isOpen, onClose }: QuotationBuilderProp
               <MessageSquare className="w-4 h-4 text-emerald-600" />
               <span>Enviar WhatsApp</span>
             </button>
-            <button onClick={handlePrint} className="flex items-center gap-1.5 text-xs text-slate-700 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 border border-slate-300 px-3 py-1.5 rounded-lg font-bold cursor-pointer">
+            <button
+              onClick={handlePrint}
+              className="flex items-center gap-1.5 text-xs text-slate-700 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 border border-slate-300 px-3 py-1.5 rounded-lg font-bold cursor-pointer"
+            >
               <Printer className="w-4 h-4 text-slate-700" />
               <span>Imprimir / PDF</span>
             </button>
@@ -159,14 +185,30 @@ export function QuotationBuilder({ deal, isOpen, onClose }: QuotationBuilderProp
               <h1 className="text-2xl font-black text-slate-900 print:text-black">{data.settings.company_name}</h1>
               <p className="text-xs text-slate-500 font-bold print:text-gray-600">Sistema CRM Empresarial • Cotización Oficial</p>
             </div>
-            <div className="text-right">
-              <span className="text-xs text-slate-500 uppercase font-bold block">Número de Cotización</span>
-              <input
-                type="text"
-                value={quoteNumber}
-                onChange={e => setQuoteNumber(e.target.value)}
-                className="bg-slate-50 border border-slate-300 rounded-lg px-2.5 py-1 text-sm font-bold text-indigo-700 text-right focus:ring-2 focus:ring-indigo-600 print:border-0 print:bg-transparent print:text-black"
-              />
+            <div className="flex items-end gap-3 text-right">
+              <div>
+                <span className="text-xs text-slate-500 uppercase font-bold block mb-1">Estado</span>
+                <select
+                  value={status}
+                  onChange={e => setStatus(e.target.value as any)}
+                  className="bg-slate-50 border border-slate-300 rounded-lg px-2 py-1 text-xs font-bold text-slate-800 cursor-pointer print:hidden"
+                >
+                  <option value="draft">Borrador</option>
+                  <option value="sent">Enviada</option>
+                  <option value="accepted">Aceptada</option>
+                  <option value="declined">Rechazada</option>
+                </select>
+              </div>
+
+              <div>
+                <span className="text-xs text-slate-500 uppercase font-bold block">Número de Cotización</span>
+                <input
+                  type="text"
+                  value={quoteNumber}
+                  onChange={e => setQuoteNumber(e.target.value)}
+                  className="bg-slate-50 border border-slate-300 rounded-lg px-2.5 py-1 text-sm font-bold text-indigo-700 text-right focus:ring-2 focus:ring-indigo-600 print:border-0 print:bg-transparent print:text-black"
+                />
+              </div>
             </div>
           </div>
 
@@ -189,20 +231,25 @@ export function QuotationBuilder({ deal, isOpen, onClose }: QuotationBuilderProp
             <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700">Desglose de Ítems / Productos</h3>
             <div className="flex items-center gap-2">
               <select
-                onChange={e => e.target.value && handleAddItem(e.target.value)}
+                onChange={e => {
+                  if (e.target.value) {
+                    handleAddItem(e.target.value);
+                    e.target.value = '';
+                  }
+                }}
                 className="bg-slate-50 border border-slate-300 rounded-lg px-2 py-1 text-xs text-slate-900 font-bold cursor-pointer"
               >
                 <option value="">+ Agregar del Catálogo de Productos...</option>
                 {products.map(p => (
                   <option key={p.id} value={p.id}>
-                    {p.name} (${p.unit_price})
+                    {p.name} ({formatCurrency(p.unit_price)})
                   </option>
                 ))}
               </select>
               <button
                 type="button"
                 onClick={() => handleAddItem()}
-                className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold px-3 py-1.5 rounded-lg"
+                className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold px-3 py-1.5 rounded-lg cursor-pointer"
               >
                 + Ítem Libre
               </button>
@@ -276,7 +323,7 @@ export function QuotationBuilder({ deal, isOpen, onClose }: QuotationBuilderProp
                       {formatCurrency(item.total)}
                     </td>
                     <td className="py-2 px-2 text-center print:hidden">
-                      <button onClick={() => removeItem(item.id)} className="text-slate-400 hover:text-red-600 p-1">
+                      <button onClick={() => removeItem(item.id)} className="text-slate-400 hover:text-red-600 p-1 cursor-pointer">
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>
                     </td>
@@ -317,16 +364,26 @@ export function QuotationBuilder({ deal, isOpen, onClose }: QuotationBuilderProp
         </div>
 
         {/* Footer Actions */}
-        <div className="p-4 border-t border-slate-200 bg-slate-50 flex justify-end gap-3 print:hidden">
-          <button onClick={onClose} className="px-4 py-2 text-xs font-bold text-slate-600 hover:text-slate-900">
-            Cancelar
-          </button>
+        <div className="p-4 border-t border-slate-200 bg-slate-50 flex items-center justify-between print:hidden">
           <button
-            onClick={handleSave}
-            className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold px-6 py-2 rounded-xl shadow-xs"
+            onClick={handleConvertToInvoice}
+            className="flex items-center gap-1.5 text-xs text-purple-700 hover:text-purple-900 font-bold cursor-pointer"
           >
-            Guardar Cotización & Actualizar Negocio
+            <Receipt className="w-4 h-4" />
+            <span>Convertir a Factura Electrónica</span>
           </button>
+
+          <div className="flex gap-3">
+            <button onClick={onClose} className="px-4 py-2 text-xs font-bold text-slate-600 hover:text-slate-900 cursor-pointer">
+              Cancelar
+            </button>
+            <button
+              onClick={handleSave}
+              className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold px-6 py-2 rounded-xl shadow-xs cursor-pointer"
+            >
+              Guardar Cotización & Actualizar Negocio
+            </button>
+          </div>
         </div>
       </div>
     </div>

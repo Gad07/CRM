@@ -21,10 +21,10 @@ export default function SettingsLeadRoutingPage() {
           </Link>
           <div>
             <h1 className="text-xl font-bold text-slate-900 flex items-center gap-2">
-              <UserCheck className="w-5 h-5 text-emerald-600" /> Configuración de Asignación Automática de Leads
+              <UserCheck className="w-5 h-5 text-indigo-600" /> Enrutador & Asignación Inteligente de Leads con IA (Gemini)
             </h1>
             <p className="text-xs text-slate-500 font-medium">
-              Gestiona el algoritmo Round-Robin, la carga equitativa y la lista de tus 10 vendedoras activas.
+              Asignación cognitiva con IA basada en especialidad, valor del lead, tasa de éxito y balanceo de carga entre las 10 vendedoras.
             </p>
           </div>
         </div>

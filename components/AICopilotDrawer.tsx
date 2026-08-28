@@ -12,7 +12,7 @@ interface AICopilotDrawerProps {
 }
 
 export function AICopilotDrawer({ deal, isOpen, onClose }: AICopilotDrawerProps) {
-  const { activePipeline, getLeadScoreInfo, formatCurrency } = useCRM();
+  const { data, activePipeline, getLeadScoreInfo, formatCurrency } = useCRM();
   const [customPrompt, setCustomPrompt] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [aiResponse, setAiResponse] = useState<string | null>(null);
@@ -85,8 +85,9 @@ export function AICopilotDrawer({ deal, isOpen, onClose }: AICopilotDrawerProps)
 
   const handleSendWhatsApp = () => {
     if (!aiResponse) return;
-    const phone = deal.contact_id ? '50255448899' : '';
-    const url = `https://wa.me/${phone}?text=${encodeURIComponent(aiResponse)}`;
+    const contact = data.contacts.find(c => c.id === deal.contact_id);
+    const rawPhone = (contact?.phone || (deal.custom_fields?.['phone'] as string) || (deal.custom_fields?.['telefono'] as string) || '').replace(/[^\d]/g, '');
+    const url = rawPhone ? `https://wa.me/${rawPhone}?text=${encodeURIComponent(aiResponse)}` : `https://wa.me/?text=${encodeURIComponent(aiResponse)}`;
     window.open(url, '_blank');
   };
 

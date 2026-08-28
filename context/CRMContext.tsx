@@ -65,6 +65,8 @@ interface CRMContextType {
   deleteCustomField: (id: string) => void;
   // Activities
   addActivity: (activity: Omit<Activity, 'id' | 'created_at'>) => void;
+  updateActivity: (activity: Activity) => void;
+  deleteActivity: (id: string) => void;
   toggleActivityStatus: (id: string) => void;
   // Enterprise ERP: Products, Quotes & Invoices
   products: Product[];
@@ -477,6 +479,20 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }));
   };
 
+  const updateActivity = (activity: Activity) => {
+    setData((prev: CRMData) => ({
+      ...prev,
+      activities: prev.activities.map((a: Activity) => (a.id === activity.id ? activity : a))
+    }));
+  };
+
+  const deleteActivity = (id: string) => {
+    setData((prev: CRMData) => ({
+      ...prev,
+      activities: prev.activities.filter((a: Activity) => a.id !== id)
+    }));
+  };
+
   const toggleActivityStatus = (id: string) => {
     setData((prev: CRMData) => ({
       ...prev,
@@ -816,6 +832,8 @@ export const CRMProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         addCustomField,
         deleteCustomField,
         addActivity,
+        updateActivity,
+        deleteActivity,
         toggleActivityStatus,
         products,
         addProduct,

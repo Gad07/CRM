@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { pushIncomingMessage } from '@/lib/whatsapp-message-store';
 
 const VERIFY_TOKEN = process.env.WHATSAPP_VERIFY_TOKEN || 'adaptable_crm_whatsapp_verify_2026';
 
@@ -32,34 +33,65 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
 
-    // Check if this is an incoming WhatsApp message event from Meta
+    // Meta WhatsApp Cloud API payload structure
     const entry = body.entry?.[0];
     const changes = entry?.changes?.[0];
     const value = changes?.value;
     const message = value?.messages?.[0];
 
     if (message) {
-      const fromPhone = message.from; // Phone number of client
-      const messageText = message.text?.body || 'Mensaje con contenido multimedia';
-      const contactName = value?.contacts?.[0]?.profile?.name || `Cliente WhatsApp (${fromPhone})`;
+      const fromPhone = String(message.from);
+      const messageText = message.text?.body
+        || message.image?.caption
+        || message.document?.caption
+        || (message.type !== 'text' ? `[${message.type || 'multimedia'}]` : 'Mensaje sin texto');
+
+      const contactName =
+        value?.contacts?.[0]?.profile?.name ||
+        `Cliente WhatsApp (+${fromPhone})`;
+
+      const metaTimestamp = message.timestamp
+        ? new Date(Number(message.timestamp) * 1000).toISOString()
+        : new Date().toISOString();
+
+      const businessPhone = value?.metadata?.display_phone_number || 'CRM';
 
       console.log(`[WHATSAPP ENTRANTE] De: ${contactName} (${fromPhone}): "${messageText}"`);
 
-      // Here the CRM automatically creates or updates the deal and assigns via Round-Robin
+      // ✅ Save to in-memory store so the UI can poll it
+      pushIncomingMessage({
+        thread_id: fromPhone,
+        from_phone: fromPhone,
+        to_phone: businessPhone,
+        contact_name: contactName,
+        text: messageText,
+        timestamp: metaTimestamp,
+        meta_message_id: message.id,
+      });
+
+      // Meta requires a 200 response quickly — always respond OK
       return NextResponse.json({
         status: 'success',
         processed_message: {
           from: fromPhone,
           contact_name: contactName,
           text: messageText,
-          timestamp: new Date().toISOString()
+          timestamp: metaTimestamp,
         }
       });
+    }
+
+    // Status updates (delivered, read) — acknowledge but no further action needed
+    const statuses = value?.statuses;
+    if (statuses?.length > 0) {
+      console.log(`[WHATSAPP STATUS] ${JSON.stringify(statuses[0])}`);
+      return NextResponse.json({ status: 'status_update_acknowledged' });
     }
 
     return NextResponse.json({ status: 'ignored' });
   } catch (error: any) {
     console.error('Error procesando webhook de WhatsApp:', error);
-    return NextResponse.json({ error: error.message || 'Error en Webhook' }, { status: 500 });
+    // Always return 200 to Meta to avoid webhook deactivation
+    return NextResponse.json({ status: 'error_logged' }, { status: 200 });
   }
 }

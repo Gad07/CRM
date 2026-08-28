@@ -43,7 +43,7 @@ Instrucción del usuario: "${safePrompt}"
 `;
 
     if (apiKey) {
-      const modelsToTry = ['gemini-3.6-flash', 'gemini-2.5-flash', 'gemini-flash-latest'];
+      const modelsToTry = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-2.5-flash-lite'];
 
       for (const modelName of modelsToTry) {
         try {

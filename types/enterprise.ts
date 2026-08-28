@@ -82,10 +82,39 @@ export interface AutomationRule {
 export interface DealTimelineEvent {
   id: string;
   deal_id: string;
-  type: 'stage_change' | 'note_added' | 'task_created' | 'task_completed' | 'quote_generated' | 'invoice_generated' | 'field_updated' | 'bot_sequence_started' | 'message_sent';
+  type: 'stage_change' | 'note_added' | 'task_created' | 'task_completed' | 'quote_generated' | 'invoice_generated' | 'field_updated' | 'bot_sequence_started' | 'message_sent' | 'whatsapp_received' | 'whatsapp_sent';
   title: string;
   description?: string;
   timestamp: string;
+}
+
+export interface WhatsAppIncomingMessage {
+  id: string;
+  thread_id: string;       // número de teléfono del contacto
+  direction: 'inbound' | 'outbound';
+  from_phone: string;
+  to_phone: string;
+  contact_name: string;
+  text: string;
+  timestamp: string;
+  meta_message_id?: string;
+  status: 'received' | 'sent' | 'delivered' | 'read' | 'failed';
+}
+
+export interface WhatsAppCredentials {
+  provider: 'meta' | 'twilio';
+  // Meta
+  phone_number_id?: string;
+  business_account_id?: string;
+  access_token?: string;
+  verify_token?: string;
+  // Twilio
+  twilio_account_sid?: string;
+  twilio_auth_token?: string;
+  twilio_from_number?: string;
+  // Status
+  is_connected: boolean;
+  connected_phone?: string;
 }
 
 export interface LeadScoreInfo {

@@ -24,21 +24,21 @@ export default function SettingsHubPage() {
   const settingsCards = [
     {
       id: 'whatsapp',
-      title: 'Conexión de WhatsApp & Webhooks',
-      description: 'Conecta tu WhatsApp vía Escaneo QR 100% Gratis o Meta Cloud API oficial con webhook de mensajes en vivo.',
+      title: 'Conexión de WhatsApp Oficial & Webhooks',
+      description: 'Conecta tu WhatsApp vía Meta Cloud API oficial (1,000 conversaciones gratis/mes) o Twilio con webhook en vivo.',
       href: '/settings/whatsapp',
       icon: <MessageSquare className="w-6 h-6 text-emerald-600" />,
-      badge: 'QR Gratis + Meta API',
+      badge: 'Meta Cloud API + Twilio',
       badgeColor: 'bg-emerald-100 text-emerald-800 border-emerald-300'
     },
     {
       id: 'lead-routing',
-      title: 'Asignación Automática de Leads',
-      description: 'Configura el algoritmo Round-Robin y asigna leads entrantes equitativamente entre tus 10 vendedoras.',
+      title: 'Asignación Inteligente de Leads con IA',
+      description: 'Enrutador cognitivo con Google Gemini IA y Round-Robin para asignar prospectos según especialidad y carga.',
       href: '/settings/lead-routing',
-      icon: <UserCheck className="w-6 h-6 text-blue-600" />,
-      badge: 'Round-Robin 10 Vendedoras',
-      badgeColor: 'bg-blue-100 text-blue-800 border-blue-300'
+      icon: <UserCheck className="w-6 h-6 text-indigo-600" />,
+      badge: 'IA Gemini + Round-Robin',
+      badgeColor: 'bg-indigo-100 text-indigo-800 border-indigo-300'
     },
     {
       id: 'workflows',

@@ -25,7 +25,7 @@ export default function SettingsWhatsAppPage() {
                 <MessageSquare className="w-5 h-5 text-emerald-600" /> Configuración de Conexión de WhatsApp
               </h1>
               <p className="text-xs text-slate-500 font-medium">
-                Conecta tu WhatsApp mediante Escaneo QR (100% Gratis) o Meta Cloud API oficial.
+                Conecta tu WhatsApp mediante Meta Cloud API oficial (1,000 conversaciones gratis/mes) o Twilio.
               </p>
             </div>
           </div>

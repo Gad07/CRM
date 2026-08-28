@@ -33,6 +33,7 @@ interface DealDrawerProps {
 
 export function DealDrawer({ deal, isOpen, onClose }: DealDrawerProps) {
   const {
+    data,
     activePipeline,
     getLeadScoreInfo,
     timelineEvents,
@@ -90,8 +91,9 @@ export function DealDrawer({ deal, isOpen, onClose }: DealDrawerProps) {
     if (!tmpl) return;
 
     const rendered = whatsappPreview || renderTemplateText(tmpl.body, deal);
-    const phone = deal.contact_id ? '50255448899' : '';
-    const url = `https://wa.me/${phone}?text=${encodeURIComponent(rendered)}`;
+    const contact = data.contacts.find(c => c.id === deal.contact_id);
+    const rawPhone = (contact?.phone || (deal.custom_fields?.['phone'] as string) || (deal.custom_fields?.['telefono'] as string) || '').replace(/[^\d]/g, '');
+    const url = rawPhone ? `https://wa.me/${rawPhone}?text=${encodeURIComponent(rendered)}` : `https://wa.me/?text=${encodeURIComponent(rendered)}`;
     window.open(url, '_blank');
 
     addTimelineEvent({
