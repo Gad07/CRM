@@ -4,7 +4,8 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   MessageSquare, Search, Send, Sparkles, CheckCheck, AlertTriangle,
   Star, ShieldCheck, Users, Phone, Plus, Loader2, WifiOff, RefreshCw, Radio,
-  QrCode, Smartphone, CheckCircle2, X, Zap
+  QrCode, Smartphone, CheckCircle2, X, Zap, Image as ImageIcon, FileText,
+  Mic, MapPin, Download, ExternalLink, Play
 } from "lucide-react";
 import { useCRM } from "@/context/CRMContext";
 import { Navbar } from "@/components/Navbar";
@@ -16,6 +17,20 @@ interface ChatMessage {
   timestamp: string;
   status?: "sent" | "delivered" | "read" | "sending" | "failed";
   isReal?: boolean;
+  media?: {
+    type: "image" | "video" | "audio" | "document" | "sticker" | "location";
+    caption?: string;
+    thumbnail?: string | null;
+    audioUrl?: string | null;
+    docUrl?: string | null;
+    fileName?: string;
+    fileSize?: number;
+    seconds?: number;
+    latitude?: number;
+    longitude?: number;
+    name?: string;
+    isVoiceNote?: boolean;
+  } | null;
 }
 
 interface WhatsAppThread {
@@ -41,15 +56,96 @@ function getInitials(name: string) {
   if (!clean) return name.substring(0, 2) || "WA";
   return clean.split(" ").map((n) => n[0]).join("").substring(0, 2).toUpperCase();
 }
+function unifyWhatsAppThreads(rawList: WhatsAppThread[], myPhone?: string): WhatsAppThread[] {
+  const cleanMyPhone = (myPhone || "5217223659263").replace(/[^\d]/g, "");
+
+  // Only keep chats with real messages
+  const valid = rawList.filter((t) => t && t.messages && t.messages.length > 0);
+
+  // Group strictly 1:1 by phone/JID
+  const map = new Map<string, WhatsAppThread>();
+
+  valid.forEach((thread) => {
+    const rawPhone = String(thread.phone || "").trim();
+    const cleanPhone = rawPhone.replace(/[^\d]/g, "");
+    const isGroup = rawPhone.includes("@g.us") || thread.company_name === "Grupo WhatsApp";
+    const isMyOwn = cleanMyPhone && (cleanPhone === cleanMyPhone || cleanPhone === "527223659263" || cleanPhone === "5217223659263");
+
+    // Key is strictly the phone number or group ID
+    const key = isGroup ? rawPhone : (cleanPhone || thread.id);
+
+    let displayName = thread.contact_name;
+    if (isMyOwn) {
+      displayName = "Tú (Mensajes Personales)";
+    } else if (!displayName || displayName === "Gad Palma") {
+      displayName = isGroup ? "Grupo WhatsApp" : `+${cleanPhone}`;
+    }
+
+    if (!map.has(key)) {
+      const msgs = [...(thread.messages || [])];
+      msgs.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+      const last = msgs[msgs.length - 1];
+      const d = last ? new Date(last.timestamp) : null;
+      const lastTime = d && !isNaN(d.getTime())
+        ? d.toLocaleTimeString("es-GT", { hour: "2-digit", minute: "2-digit" })
+        : thread.last_time || "Reciente";
+
+      map.set(key, {
+        ...thread,
+        id: `chat-wa-${key}`,
+        contact_name: displayName,
+        phone: isGroup ? rawPhone : (cleanPhone ? `+${cleanPhone}` : rawPhone),
+        company_name: isGroup ? "Grupo WhatsApp" : isMyOwn ? "Personal" : "WhatsApp",
+        deal_title: isGroup ? "Chat Grupal" : isMyOwn ? "Notas Personales" : "Conversación directa",
+        last_message: last ? last.text : thread.last_message,
+        last_time: lastTime,
+        messages: msgs,
+        has_real_messages: true
+      });
+    } else {
+      const existing = map.get(key)!;
+      if (displayName && !displayName.startsWith("+") && displayName !== "Contacto WhatsApp") {
+        existing.contact_name = displayName;
+      }
+      const existingIds = new Set(existing.messages.map((m) => m.id));
+      (thread.messages || []).forEach((m) => {
+        if (!existingIds.has(m.id)) {
+          existing.messages.push(m);
+          existingIds.add(m.id);
+        }
+      });
+      existing.messages.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+      const last = existing.messages[existing.messages.length - 1];
+      if (last) {
+        existing.last_message = last.text;
+        const d = new Date(last.timestamp);
+        existing.last_time = !isNaN(d.getTime())
+          ? d.toLocaleTimeString("es-GT", { hour: "2-digit", minute: "2-digit" })
+          : last.timestamp;
+      }
+    }
+  });
+
+  const list = Array.from(map.values());
+  list.sort((a, b) => {
+    const timeA = a.messages.length > 0 ? new Date(a.messages[a.messages.length - 1].timestamp).getTime() : 0;
+    const timeB = b.messages.length > 0 ? new Date(b.messages[b.messages.length - 1].timestamp).getTime() : 0;
+    return timeB - timeA;
+  });
+
+  return list;
+}
+
 function formatPhone(phone?: string): string {
   if (!phone) return "Sin teléfono";
-  if (phone.includes("@lid") || (phone.length > 14 && !phone.startsWith("52") && !phone.startsWith("50"))) {
-    return "Usuario WhatsApp";
+  if (phone.includes("@lid") || (phone.length > 13 && !phone.startsWith("52") && !phone.startsWith("50"))) {
+    return "WhatsApp Directo";
   }
   const clean = phone.replace(/[^\d]/g, "");
   if (clean.length >= 10) return `+${clean}`;
   return phone;
 }
+
 function ls(key: string, fallback = "") {
   if (typeof window === "undefined") return fallback;
   return localStorage.getItem(key) || fallback;
@@ -139,8 +235,9 @@ export default function WhatsAppInboxPage() {
       if (rawReal) {
         const parsed: WhatsAppThread[] = JSON.parse(rawReal);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          setThreads(parsed);
-          if (!activeThreadId) setActiveThreadId(parsed[0].id);
+          const unified = unifyWhatsAppThreads(parsed, connectedPhone);
+          setThreads(unified);
+          if (!activeThreadId && unified[0]) setActiveThreadId(unified[0].id);
           return;
         }
       }
@@ -164,7 +261,7 @@ export default function WhatsAppInboxPage() {
     });
     setThreads(built);
     if (built.length > 0 && !activeThreadId) setActiveThreadId(built[0].id);
-  }, [data.deals, data.contacts, data.settings]);
+  }, [data.deals, data.contacts, data.settings, connectedPhone]);
 
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [threads, activeThreadId]);
 
@@ -186,72 +283,31 @@ export default function WhatsAppInboxPage() {
       const resData = await res.json();
       if (Array.isArray(resData.chats) && resData.chats.length > 0) {
         setHasLiveMessages(true);
-        const realThreads: WhatsAppThread[] = resData.chats.map((realChat: any) => {
-          const cleanP = realChat.phone;
-          return {
-            id: realChat.id || `chat-wa-${cleanP}`,
-            contact_name: realChat.contact_name || `+${cleanP}`,
-            phone: realChat.phone,
-            company_name: realChat.company_name || "WhatsApp",
-            deal_title: realChat.deal_title || "Chat de WhatsApp",
-            deal_value: 0,
-            deal_id: realChat.deal_id || "",
-            unread_count: realChat.unread_count || 0,
-            last_message: realChat.last_message || "Conversación activa",
-            last_time: realChat.last_time || "Reciente",
-            assigned_rep: realChat.assigned_rep || "WhatsApp",
-            response_delay_minutes: 0,
-            messages: realChat.messages || [],
-            has_real_messages: true,
-          };
-        });
+        const unified = unifyWhatsAppThreads(resData.chats, connectedPhone);
 
-        setThreads(realThreads);
+        setThreads(unified);
         if (typeof window !== "undefined") {
-          localStorage.setItem("WA_REAL_SAVED_THREADS", JSON.stringify(realThreads));
+          localStorage.setItem("WA_REAL_SAVED_THREADS", JSON.stringify(unified));
         }
         setActiveThreadId((curr) => {
-          if (curr && realThreads.some((t) => t.id === curr)) return curr;
-          return realThreads[0]?.id || "";
+          if (curr && unified.some((t) => t.id === curr)) return curr;
+          return unified[0]?.id || "";
         });
       }
     } catch {}
-  }, []);
+  }, [connectedPhone]);
 
   const pollForNewMessages = useCallback(async () => {
     if (isPolling) return;
     setIsPolling(true);
     try {
       await fetchRealWhatsAppChats();
-      const res = await fetch(`/api/whatsapp/messages?since=${encodeURIComponent(lastPolledAt)}`);
-      if (!res.ok) return;
-      const resData: { messages: any[] } = await res.json();
-      const incoming = resData.messages.filter((m) => m.direction === "inbound");
-      if (incoming.length === 0) return;
-      setHasLiveMessages(true);
-      setLastPolledAt(new Date().toISOString());
-      setThreads((prev) => {
-        const cleanPrev = prev.filter((t) => t.has_real_messages || !t.id.startsWith("chat-deal"));
-        const updated = [...cleanPrev];
-        incoming.forEach((inMsg) => {
-          const phone = inMsg.from_phone;
-          const threadIdx = updated.findIndex((t) => t.phone.replace(/[^\d]/g, "") === phone.replace(/[^\d]/g, ""));
-          const newChatMsg: ChatMessage = { id: inMsg.id, sender: "contact", text: inMsg.text, timestamp: new Date(inMsg.timestamp).toLocaleTimeString("es-GT", { hour: "2-digit", minute: "2-digit" }), isReal: true };
-          if (threadIdx >= 0) {
-            const exists = updated[threadIdx].messages.some((m) => m.id === inMsg.id);
-            if (!exists) { updated[threadIdx] = { ...updated[threadIdx], messages: [...updated[threadIdx].messages, newChatMsg], last_message: inMsg.text, last_time: newChatMsg.timestamp, unread_count: updated[threadIdx].unread_count + 1, has_real_messages: true }; }
-          } else {
-            updated.unshift({ id: `chat-real-${phone}`, contact_name: inMsg.contact_name || `+${phone}`, phone, company_name: "Contacto WhatsApp", deal_title: "Conversación entrante", deal_value: 0, deal_id: "", unread_count: 1, last_message: inMsg.text, last_time: newChatMsg.timestamp, assigned_rep: "WhatsApp", response_delay_minutes: 0, messages: [newChatMsg], has_real_messages: true });
-          }
-        });
-        if (typeof window !== "undefined") {
-          localStorage.setItem("WA_REAL_SAVED_THREADS", JSON.stringify(updated));
-        }
-        return updated;
-      });
-    } catch (err) { console.warn("[WhatsApp Polling] Error:", err); }
-    finally { setIsPolling(false); }
-  }, [isPolling, lastPolledAt, fetchRealWhatsAppChats]);
+    } catch (err) {
+      console.warn("[WhatsApp Polling] Error:", err);
+    } finally {
+      setIsPolling(false);
+    }
+  }, [isPolling, fetchRealWhatsAppChats]);
 
   useEffect(() => {
     fetchRealWhatsAppChats();
@@ -408,25 +464,22 @@ export default function WhatsAppInboxPage() {
   const uniqueReps = Array.from(new Set(threads.map((t) => t.assigned_rep)));
   const filteredThreads = threads.filter((t) => {
     // If WhatsApp is connected, remove any mock dummy deal that has no real messages
-    if (isWhatsAppConnected && (t.id.startsWith("chat-deal-") || t.id.startsWith("chat-d-") || !t.has_real_messages)) {
-      return false;
-    }
     const matchesSearch = t.contact_name.toLowerCase().includes(searchQuery.toLowerCase()) || t.company_name.toLowerCase().includes(searchQuery.toLowerCase()) || t.deal_title.toLowerCase().includes(searchQuery.toLowerCase()) || t.phone.toLowerCase().includes(searchQuery.toLowerCase());
     const matchesRep = selectedRepFilter === "all" || t.assigned_rep === selectedRepFilter;
     return matchesSearch && matchesRep;
   });
 
   return (
-    <div className="min-h-screen bg-slate-100 flex flex-col font-sans text-slate-900">
+    <div className="h-screen max-h-screen overflow-hidden bg-slate-100 flex flex-col font-sans text-slate-900">
       <Navbar />
-      <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 flex flex-col gap-4">
+      <main className="flex-1 min-h-0 p-3 sm:p-4 flex flex-col gap-3 max-w-7xl w-full mx-auto overflow-hidden">
         {/* Connection banner */}
-        <div className={`flex flex-wrap items-center justify-between gap-3 px-4 py-3 rounded-xl border text-xs font-bold ${isWhatsAppConnected ? "bg-emerald-50 border-emerald-300 text-emerald-900" : "bg-amber-50 border-amber-300 text-amber-900"}`}>
+        <div className={`shrink-0 flex flex-wrap items-center justify-between gap-3 px-4 py-2.5 rounded-xl border text-xs font-bold ${isWhatsAppConnected ? "bg-emerald-50 border-emerald-300 text-emerald-900" : "bg-amber-50 border-amber-300 text-amber-900"}`}>
           <div className="flex items-center gap-2.5">
             {isWhatsAppConnected ? (
               <>
                 <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
-                <span>
+                <span className="flex items-center gap-1">
                   WhatsApp Vinculado{connectedPhone ? `: +${connectedPhone}` : ""} {baileysState.user?.name ? `(${baileysState.user.name})` : ""} — Sincronización en Tiempo Real
                   {hasLiveMessages && <span className="ml-2 bg-red-500 text-white text-[9px] font-extrabold px-1.5 py-0.5 rounded-full animate-pulse">EN VIVO</span>}
                 </span>
@@ -465,10 +518,10 @@ export default function WhatsAppInboxPage() {
         </div>
 
         {/* Main layout */}
-        <div className="bg-white border border-slate-200 rounded-2xl shadow-sm flex-1 grid grid-cols-1 md:grid-cols-12 overflow-hidden min-h-[660px]">
+        <div className="bg-white border border-slate-200 rounded-2xl shadow-sm flex-1 min-h-0 grid grid-cols-1 md:grid-cols-12 overflow-hidden">
           {/* Thread list */}
-          <div className="md:col-span-4 border-r border-slate-200 flex flex-col bg-slate-50">
-            <div className="p-3 border-b border-slate-200 bg-white">
+          <div className="md:col-span-4 border-r border-slate-200 flex flex-col bg-slate-50 h-full min-h-0 overflow-hidden">
+            <div className="p-3 border-b border-slate-200 bg-white shrink-0">
               <div className="flex items-center justify-between mb-2">
                 <h2 className="text-xs font-extrabold text-slate-900 flex items-center gap-1.5"><MessageSquare className="w-4 h-4 text-emerald-600" />Conversaciones ({filteredThreads.length})</h2>
                 <div className="flex items-center gap-1">
@@ -498,7 +551,7 @@ export default function WhatsAppInboxPage() {
                 </div>
               )}
             </div>
-            <div className="flex-1 overflow-y-auto divide-y divide-slate-100">
+            <div className="flex-1 min-h-0 overflow-y-auto divide-y divide-slate-100">
               {filteredThreads.length === 0 ? (
                 <div className="p-6 text-center text-xs text-slate-400 font-medium">No hay conversaciones que coincidan.</div>
               ) : filteredThreads.map((thread) => {
@@ -528,8 +581,8 @@ export default function WhatsAppInboxPage() {
 
           {/* Active thread */}
           {activeThread ? (
-            <div className="md:col-span-8 flex flex-col bg-white">
-              <div className="p-4 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3 bg-slate-50">
+            <div className="md:col-span-8 flex flex-col bg-white h-full min-h-0 overflow-hidden">
+              <div className="p-3.5 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3 bg-slate-50 shrink-0">
                 <div className="flex items-center gap-3">
                   <div className="w-10 h-10 rounded-full bg-slate-900 text-white font-extrabold text-xs flex items-center justify-center shadow-xs">{getInitials(activeThread.contact_name)}</div>
                   <div>
@@ -546,10 +599,107 @@ export default function WhatsAppInboxPage() {
                 </div>
               </div>
 
-              <div className="flex-1 p-5 overflow-y-auto space-y-3 bg-slate-50/50 min-h-0">
+              <div className="flex-1 min-h-0 p-4 overflow-y-auto space-y-3 bg-slate-50/50">
                 {activeThread.messages.map((msg) => (
                   <div key={msg.id} className={`flex flex-col max-w-md ${msg.sender === "agent" ? "ml-auto items-end" : "mr-auto items-start"}`}>
                     <div className={`p-3 rounded-2xl text-xs font-medium leading-relaxed shadow-2xs ${msg.sender === "agent" ? msg.status === "failed" ? "bg-red-100 border border-red-300 text-red-900 rounded-br-none" : "bg-indigo-600 text-white rounded-br-none" : msg.sender === "system" ? "bg-amber-50 border border-amber-200 text-amber-900 rounded-none text-center text-[11px] italic" : msg.isReal ? "bg-white border-2 border-emerald-300 text-slate-800 rounded-bl-none" : "bg-white border border-slate-200 text-slate-800 rounded-bl-none"}`}>
+                      {/* Image Message */}
+                      {msg.media?.type === "image" && (
+                        <div className="mb-2 space-y-1.5">
+                          {msg.media.thumbnail ? (
+                            /* eslint-disable-next-line @next/next/no-img-element */
+                            <img
+                              src={msg.media.thumbnail}
+                              alt="Imagen de WhatsApp"
+                              className="rounded-xl max-w-full h-auto max-h-72 object-cover shadow-xs border border-slate-100 cursor-pointer hover:opacity-95"
+                              onClick={() => window.open(msg.media?.thumbnail || "", "_blank")}
+                            />
+                          ) : (
+                            <div className="bg-slate-100 p-3 rounded-xl flex items-center gap-2 text-slate-700">
+                              <ImageIcon className="w-5 h-5 text-indigo-600" />
+                              <span className="text-[11px] font-bold">Foto adjunta</span>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Sticker Message */}
+                      {msg.media?.type === "sticker" && (
+                        <div className="mb-2">
+                          {msg.media.thumbnail ? (
+                            /* eslint-disable-next-line @next/next/no-img-element */
+                            <img
+                              src={msg.media.thumbnail}
+                              alt="Sticker de WhatsApp"
+                              className="w-28 h-28 object-contain"
+                            />
+                          ) : (
+                            <span className="text-xl">💟</span>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Audio / Voice note */}
+                      {msg.media?.type === "audio" && (
+                        <div className="mb-2 bg-emerald-50 text-emerald-950 p-2.5 rounded-xl border border-emerald-200 space-y-1.5">
+                          <div className="flex items-center gap-2">
+                            <div className="w-6 h-6 rounded-full bg-emerald-600 text-white flex items-center justify-center shrink-0">
+                              <Mic className="w-3 h-3" />
+                            </div>
+                            <span className="text-[11px] font-bold">{msg.media.isVoiceNote ? "Nota de voz" : "Audio de WhatsApp"}</span>
+                            {msg.media.seconds ? (
+                              <span className="text-[10px] text-emerald-700 font-bold ml-auto">{Math.floor(msg.media.seconds / 60)}:{String(msg.media.seconds % 60).padStart(2, "0")}</span>
+                            ) : null}
+                          </div>
+                          {msg.media.audioUrl ? (
+                            <audio controls src={msg.media.audioUrl} className="w-full h-8" />
+                          ) : null}
+                        </div>
+                      )}
+
+                      {/* Document */}
+                      {msg.media?.type === "document" && (
+                        <div className="mb-2 flex items-center justify-between gap-3 bg-slate-100 p-3 rounded-xl border border-slate-200 text-slate-800">
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <FileText className="w-6 h-6 text-indigo-600 shrink-0" />
+                            <div className="min-w-0">
+                              <p className="text-xs font-bold truncate">{msg.media.fileName || "Documento"}</p>
+                              <span className="text-[10px] text-slate-500 font-medium">Archivo adjunto</span>
+                            </div>
+                          </div>
+                          {msg.media.docUrl && (
+                            <a
+                              href={msg.media.docUrl}
+                              download={msg.media.fileName || "documento"}
+                              className="p-1.5 rounded-lg bg-white border border-slate-200 text-indigo-600 hover:bg-indigo-50 transition-colors shrink-0 shadow-2xs"
+                              title="Descargar archivo"
+                            >
+                              <Download className="w-4 h-4" />
+                            </a>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Location */}
+                      {msg.media?.type === "location" && (
+                        <div className="mb-1 bg-slate-100 p-2.5 rounded-xl border border-slate-200 text-slate-800 space-y-1">
+                          <div className="flex items-center gap-1.5 text-indigo-700 font-bold text-xs">
+                            <MapPin className="w-4 h-4 text-red-500" />
+                            <span>{msg.media.name || "Ubicación compartida"}</span>
+                          </div>
+                          {msg.media.latitude && msg.media.longitude && (
+                            <a
+                              href={`https://www.google.com/maps?q=${msg.media.latitude},${msg.media.longitude}`}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-[10px] text-indigo-600 underline font-bold flex items-center gap-1 mt-1"
+                            >
+                              <span>Ver en Google Maps</span> <ExternalLink className="w-3 h-3" />
+                            </a>
+                          )}
+                        </div>
+                      )}
+
                       <p className="whitespace-pre-wrap">{msg.text}</p>
                     </div>
                     <div className="flex items-center gap-1 text-[10px] text-slate-400 mt-1 px-1">
@@ -564,7 +714,7 @@ export default function WhatsAppInboxPage() {
                 <div ref={messagesEndRef} />
               </div>
 
-              <div className="p-4 border-t border-slate-200 bg-white space-y-3">
+              <div className="p-3.5 border-t border-slate-200 bg-white space-y-2.5 shrink-0">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <select value={selectedTemplateId} onChange={(e) => handleSelectTemplate(e.target.value)} className="bg-slate-100 border border-slate-200 rounded-xl px-3 py-1.5 text-xs font-bold text-slate-700 focus:ring-2 focus:ring-indigo-600 cursor-pointer">
                     <option value="">Cargar plantilla...</option>

@@ -1,4 +1,4 @@
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, Browsers } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, Browsers, downloadMediaMessage } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const QRCode = require('qrcode');
 const http = require('http');
@@ -21,8 +21,54 @@ let connectionState = {
 };
 
 // Real WhatsApp Chats Store (Phone -> { id, phone, name, last_message, timestamp, unread, messages: [] })
+// Real WhatsApp Chats Store (Phone -> { id, phone, name, last_message, timestamp, unread, messages: [] })
 const chatsMap = new Map();
 const contactsMap = new Map();
+const lidToPhoneMap = new Map();
+const phoneToLidMap = new Map();
+
+function getCanonicalChatKey(remoteJid) {
+  if (!remoteJid) return '';
+  if (remoteJid.includes('@g.us')) return remoteJid; // Groups are keyed by group JID
+  if (remoteJid.includes('@lid')) {
+    const cleanLid = remoteJid.replace('@lid', '');
+    if (lidToPhoneMap.has(cleanLid)) {
+      return lidToPhoneMap.get(cleanLid);
+    }
+    return cleanLid;
+  }
+  return remoteJid.replace('@s.whatsapp.net', '').replace(/[^\d]/g, '');
+}
+
+function registerContact(c) {
+  if (!c || !c.id) return;
+  const id = c.id;
+  const name = c.name || c.notify || c.verifiedName;
+  const cleanPhone = id.replace('@s.whatsapp.net', '').replace(/[^\d]/g, '');
+
+  if (c.lid) {
+    const cleanLid = c.lid.replace('@lid', '');
+    lidToPhoneMap.set(cleanLid, cleanPhone);
+    phoneToLidMap.set(cleanPhone, cleanLid);
+  }
+
+  if (name) {
+    contactsMap.set(id, name);
+    if (cleanPhone) contactsMap.set(cleanPhone, name);
+    if (c.lid) {
+      contactsMap.set(c.lid, name);
+      contactsMap.set(c.lid.replace('@lid', ''), name);
+    }
+
+    const canonicalKey = getCanonicalChatKey(id);
+    if (chatsMap.has(canonicalKey)) {
+      const ch = chatsMap.get(canonicalKey);
+      if (!ch.contact_name || ch.contact_name.startsWith('+') || ch.contact_name.includes('@')) {
+        ch.contact_name = name;
+      }
+    }
+  }
+}
 
 function extractMessageText(m) {
   if (!m || !m.message) return '';
@@ -31,17 +77,17 @@ function extractMessageText(m) {
     m.message.extendedTextMessage?.text ||
     m.message.imageMessage?.caption ||
     m.message.documentMessage?.caption ||
-    (m.message.audioMessage ? '[Nota de Voz]' : '') ||
-    (m.message.imageMessage ? '[Foto]' : '') ||
-    (m.message.videoMessage ? '[Video]' : '') ||
-    (m.message.stickerMessage ? '[Sticker]' : '') ||
-    (m.message.contactMessage ? '[Contacto]' : '') ||
-    (m.message.locationMessage ? '[Ubicación]' : '') ||
-    '[Mensaje multimedia]'
+    (m.message.audioMessage ? (m.message.audioMessage.ptt ? '🎙️ Nota de voz' : '🎵 Audio') : '') ||
+    (m.message.imageMessage ? '📷 Foto' : '') ||
+    (m.message.videoMessage ? '🎥 Video' : '') ||
+    (m.message.stickerMessage ? '💟 Sticker' : '') ||
+    (m.message.contactMessage ? '👤 Contacto' : '') ||
+    (m.message.locationMessage ? '📍 Ubicación' : '') ||
+    'Mensaje multimedia'
   );
 }
 
-function processMessage(m) {
+async function processMessage(m) {
   if (!m || !m.key) return null;
   const remoteJid = m.key.remoteJid;
   if (!remoteJid || remoteJid === 'status@broadcast') {
@@ -49,18 +95,98 @@ function processMessage(m) {
   }
 
   const isGroup = remoteJid.includes('@g.us');
-  const cleanPhone = isGroup
-    ? remoteJid.replace('@g.us', '')
-    : remoteJid.replace('@s.whatsapp.net', '').replace(/[^\d]/g, '');
-  if (!cleanPhone) return null;
+  const canonicalKey = getCanonicalChatKey(remoteJid);
+  if (!canonicalKey) return null;
 
   const fromMe = !!m.key.fromMe;
   const text = extractMessageText(m);
   if (!text) return null;
 
-  const senderName = isGroup
-    ? (contactsMap.get(remoteJid) || m.pushName || 'Grupo de WhatsApp')
-    : (contactsMap.get(cleanPhone) || m.pushName || `+${cleanPhone}`);
+  // Extract rich media metadata and download binary payload
+  let media = null;
+  const msg = m.message;
+  if (msg) {
+    if (msg.imageMessage) {
+      let dataUrl = null;
+      try {
+        const buffer = await downloadMediaMessage(m, 'buffer', {}, { logger: pino({ level: 'silent' }), reuploadRequest: sock?.updateMediaMessage });
+        if (buffer) {
+          dataUrl = `data:${msg.imageMessage.mimetype || 'image/jpeg'};base64,${buffer.toString('base64')}`;
+        }
+      } catch (err) {
+        if (msg.imageMessage.jpegThumbnail) {
+          const buf = Buffer.isBuffer(msg.imageMessage.jpegThumbnail) ? msg.imageMessage.jpegThumbnail : Buffer.from(msg.imageMessage.jpegThumbnail);
+          dataUrl = `data:image/jpeg;base64,${buf.toString('base64')}`;
+        }
+      }
+      media = {
+        type: 'image',
+        caption: msg.imageMessage.caption || '',
+        thumbnail: dataUrl,
+        mimetype: msg.imageMessage.mimetype || 'image/jpeg'
+      };
+    } else if (msg.audioMessage) {
+      let audioUrl = null;
+      try {
+        const buffer = await downloadMediaMessage(m, 'buffer', {}, { logger: pino({ level: 'silent' }), reuploadRequest: sock?.updateMediaMessage });
+        if (buffer) {
+          audioUrl = `data:${msg.audioMessage.mimetype || 'audio/ogg; codecs=opus'};base64,${buffer.toString('base64')}`;
+        }
+      } catch (err) {}
+      media = {
+        type: 'audio',
+        audioUrl: audioUrl,
+        seconds: msg.audioMessage.seconds || 0,
+        isVoiceNote: !!msg.audioMessage.ptt
+      };
+    } else if (msg.documentMessage) {
+      let docUrl = null;
+      try {
+        const buffer = await downloadMediaMessage(m, 'buffer', {}, { logger: pino({ level: 'silent' }), reuploadRequest: sock?.updateMediaMessage });
+        if (buffer) {
+          docUrl = `data:${msg.documentMessage.mimetype || 'application/octet-stream'};base64,${buffer.toString('base64')}`;
+        }
+      } catch (err) {}
+      media = {
+        type: 'document',
+        docUrl: docUrl,
+        fileName: msg.documentMessage.fileName || msg.documentMessage.title || 'Documento',
+        fileSize: msg.documentMessage.fileLength || 0,
+        mimetype: msg.documentMessage.mimetype || 'application/pdf'
+      };
+    } else if (msg.stickerMessage) {
+      let stickerUrl = null;
+      try {
+        const buffer = await downloadMediaMessage(m, 'buffer', {}, { logger: pino({ level: 'silent' }), reuploadRequest: sock?.updateMediaMessage });
+        if (buffer) {
+          stickerUrl = `data:image/webp;base64,${buffer.toString('base64')}`;
+        }
+      } catch (err) {}
+      media = {
+        type: 'sticker',
+        thumbnail: stickerUrl
+      };
+    } else if (msg.locationMessage) {
+      media = {
+        type: 'location',
+        latitude: msg.locationMessage.degreesLatitude,
+        longitude: msg.locationMessage.degreesLongitude,
+        name: msg.locationMessage.name || msg.locationMessage.address || 'Ubicación compartida'
+      };
+    }
+  }
+
+  const myPhone = connectionState.user?.phone || '';
+  const isSelfChat = canonicalKey === myPhone;
+
+  let senderName = '';
+  if (isSelfChat) {
+    senderName = 'Tú (Notas Personales)';
+  } else if (isGroup) {
+    senderName = contactsMap.get(remoteJid) || (fromMe ? null : m.pushName) || 'Grupo de WhatsApp';
+  } else {
+    senderName = contactsMap.get(canonicalKey) || contactsMap.get(remoteJid) || (fromMe ? null : m.pushName) || `+${canonicalKey}`;
+  }
 
   const timestamp = m.messageTimestamp
     ? new Date(Number(m.messageTimestamp) * 1000).toISOString()
@@ -70,22 +196,23 @@ function processMessage(m) {
     id: m.key.id || `msg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
     sender: fromMe ? 'agent' : 'contact',
     text: text,
+    media: media,
     timestamp: timestamp,
     status: fromMe ? 'sent' : 'delivered',
     isReal: true
   };
 
   // Update or create chat thread
-  let chat = chatsMap.get(cleanPhone);
+  let chat = chatsMap.get(canonicalKey);
   if (!chat) {
     chat = {
-      id: `chat-wa-${cleanPhone}`,
+      id: `chat-wa-${canonicalKey}`,
       contact_name: senderName,
-      phone: isGroup ? remoteJid : cleanPhone,
-      company_name: isGroup ? 'Grupo WhatsApp' : 'WhatsApp',
+      phone: remoteJid,
+      company_name: isGroup ? 'Grupo WhatsApp' : isSelfChat ? 'Personal' : 'WhatsApp',
       deal_title: isGroup ? 'Chat Grupal' : 'Conversación directa',
       deal_value: 0,
-      deal_id: `wa-${cleanPhone}`,
+      deal_id: `wa-${canonicalKey}`,
       unread_count: fromMe ? 0 : 1,
       last_message: text,
       last_time: new Date(timestamp).toLocaleTimeString('es-GT', { hour: '2-digit', minute: '2-digit' }),
@@ -95,11 +222,11 @@ function processMessage(m) {
       has_real_messages: true,
       timestamp: timestamp
     };
-    chatsMap.set(cleanPhone, chat);
-  }
-
-  if (senderName && !senderName.startsWith('+')) {
-    chat.contact_name = senderName;
+    chatsMap.set(canonicalKey, chat);
+  } else {
+    if (senderName && !senderName.startsWith('+') && !senderName.includes('@') && (!chat.contact_name || chat.contact_name.startsWith('+') || chat.contact_name.includes('@'))) {
+      chat.contact_name = senderName;
+    }
   }
 
   // Avoid duplicates
@@ -120,20 +247,29 @@ function registerChat(c) {
   if (!c || !c.id || c.id === 'status@broadcast') return;
   const remoteJid = c.id;
   const isGroup = remoteJid.includes('@g.us');
-  const cleanKey = remoteJid.replace('@s.whatsapp.net', '').replace('@lid', '').replace('@g.us', '');
+  const canonicalKey = getCanonicalChatKey(remoteJid);
+  if (!canonicalKey) return;
 
-  const name = c.name || contactsMap.get(remoteJid) || contactsMap.get(cleanKey) || (isGroup ? 'Grupo WhatsApp' : `+${cleanKey}`);
+  const myPhone = connectionState.user?.phone || '';
+  const isSelfChat = canonicalKey === myPhone;
 
-  let chat = chatsMap.get(cleanKey) || chatsMap.get(remoteJid);
+  let name = '';
+  if (isSelfChat) {
+    name = 'Tú (Notas Personales)';
+  } else {
+    name = c.name || contactsMap.get(remoteJid) || contactsMap.get(canonicalKey) || (isGroup ? 'Grupo WhatsApp' : `+${canonicalKey}`);
+  }
+
+  let chat = chatsMap.get(canonicalKey);
   if (!chat) {
     chat = {
-      id: `chat-wa-${cleanKey}`,
+      id: `chat-wa-${canonicalKey}`,
       contact_name: name,
       phone: remoteJid,
-      company_name: isGroup ? 'Grupo WhatsApp' : 'WhatsApp',
+      company_name: isGroup ? 'Grupo WhatsApp' : isSelfChat ? 'Personal' : 'WhatsApp',
       deal_title: isGroup ? 'Chat Grupal' : 'Conversación de WhatsApp',
       deal_value: 0,
-      deal_id: `wa-${cleanKey}`,
+      deal_id: `wa-${canonicalKey}`,
       unread_count: c.unreadCount || 0,
       last_message: 'Conversación de WhatsApp',
       last_time: c.conversationTimestamp ? new Date(Number(c.conversationTimestamp) * 1000).toLocaleTimeString('es-GT', { hour: '2-digit', minute: '2-digit' }) : 'Reciente',
@@ -143,8 +279,8 @@ function registerChat(c) {
       has_real_messages: true,
       timestamp: c.conversationTimestamp ? new Date(Number(c.conversationTimestamp) * 1000).toISOString() : new Date().toISOString()
     };
-    chatsMap.set(cleanKey, chat);
-  } else if (name && !name.startsWith('+')) {
+    chatsMap.set(canonicalKey, chat);
+  } else if (name && !name.startsWith('+') && !name.includes('@')) {
     chat.contact_name = name;
   }
 }
@@ -197,31 +333,11 @@ async function startBaileys() {
 
     // Initial History & Contacts Sync from Phone
     sock.ev.on('contacts.set', ({ contacts }) => {
-      if (Array.isArray(contacts)) {
-        contacts.forEach(c => {
-          const id = c.id || '';
-          const name = c.name || c.notify || c.verifiedName;
-          if (name) {
-            contactsMap.set(id, name);
-            const clean = id.replace('@s.whatsapp.net', '').replace('@lid', '').replace('@g.us', '');
-            contactsMap.set(clean, name);
-          }
-        });
-      }
+      if (Array.isArray(contacts)) contacts.forEach(c => registerContact(c));
     });
 
     sock.ev.on('contacts.upsert', (contacts) => {
-      if (Array.isArray(contacts)) {
-        contacts.forEach(c => {
-          const id = c.id || '';
-          const name = c.name || c.notify || c.verifiedName;
-          if (name) {
-            contactsMap.set(id, name);
-            const clean = id.replace('@s.whatsapp.net', '').replace('@lid', '').replace('@g.us', '');
-            contactsMap.set(clean, name);
-          }
-        });
-      }
+      if (Array.isArray(contacts)) contacts.forEach(c => registerContact(c));
     });
 
     sock.ev.on('chats.set', ({ chats }) => {
@@ -237,15 +353,7 @@ async function startBaileys() {
       console.log(`📥 [WhatsApp Baileys] Sincronizando historial completo: ${chats?.length || 0} chats, ${contacts?.length || 0} contactos, ${messages?.length || 0} mensajes recibidos del teléfono.`);
 
       if (Array.isArray(contacts)) {
-        contacts.forEach(c => {
-          const id = c.id || '';
-          const name = c.name || c.notify || c.verifiedName;
-          if (name) {
-            contactsMap.set(id, name);
-            const clean = id.replace('@s.whatsapp.net', '').replace('@lid', '').replace('@g.us', '');
-            contactsMap.set(clean, name);
-          }
-        });
+        contacts.forEach(c => registerContact(c));
       }
 
       if (Array.isArray(chats)) {
@@ -253,7 +361,9 @@ async function startBaileys() {
       }
 
       if (Array.isArray(messages)) {
-        messages.forEach(m => processMessage(m));
+        for (const m of messages) {
+          await processMessage(m);
+        }
       }
     });
 
@@ -325,7 +435,7 @@ async function startBaileys() {
       if (!messages || messages.length === 0) return;
 
       for (const m of messages) {
-        const res = processMessage(m);
+        const res = await processMessage(m);
         if (res && !m.key.fromMe) {
           console.log(`📩 [WhatsApp Mensaje] De ${res.chat.contact_name} (+${res.chat.phone}): "${res.message.text}"`);
         }
