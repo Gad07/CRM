@@ -20,8 +20,134 @@ let connectionState = {
   lastError: null
 };
 
-// Recent message buffer
-const recentMessages = [];
+// Real WhatsApp Chats Store (Phone -> { id, phone, name, last_message, timestamp, unread, messages: [] })
+const chatsMap = new Map();
+const contactsMap = new Map();
+
+function extractMessageText(m) {
+  if (!m || !m.message) return '';
+  return (
+    m.message.conversation ||
+    m.message.extendedTextMessage?.text ||
+    m.message.imageMessage?.caption ||
+    m.message.documentMessage?.caption ||
+    (m.message.audioMessage ? '[Nota de Voz]' : '') ||
+    (m.message.imageMessage ? '[Foto]' : '') ||
+    (m.message.videoMessage ? '[Video]' : '') ||
+    (m.message.stickerMessage ? '[Sticker]' : '') ||
+    (m.message.contactMessage ? '[Contacto]' : '') ||
+    (m.message.locationMessage ? '[Ubicación]' : '') ||
+    '[Mensaje multimedia]'
+  );
+}
+
+function processMessage(m) {
+  if (!m || !m.key) return null;
+  const remoteJid = m.key.remoteJid;
+  if (!remoteJid || remoteJid === 'status@broadcast') {
+    return null; // Skip status broadcasts
+  }
+
+  const isGroup = remoteJid.includes('@g.us');
+  const cleanPhone = isGroup
+    ? remoteJid.replace('@g.us', '')
+    : remoteJid.replace('@s.whatsapp.net', '').replace(/[^\d]/g, '');
+  if (!cleanPhone) return null;
+
+  const fromMe = !!m.key.fromMe;
+  const text = extractMessageText(m);
+  if (!text) return null;
+
+  const senderName = isGroup
+    ? (contactsMap.get(remoteJid) || m.pushName || 'Grupo de WhatsApp')
+    : (contactsMap.get(cleanPhone) || m.pushName || `+${cleanPhone}`);
+
+  const timestamp = m.messageTimestamp
+    ? new Date(Number(m.messageTimestamp) * 1000).toISOString()
+    : new Date().toISOString();
+
+  const msgObj = {
+    id: m.key.id || `msg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    sender: fromMe ? 'agent' : 'contact',
+    text: text,
+    timestamp: timestamp,
+    status: fromMe ? 'sent' : 'delivered',
+    isReal: true
+  };
+
+  // Update or create chat thread
+  let chat = chatsMap.get(cleanPhone);
+  if (!chat) {
+    chat = {
+      id: `chat-wa-${cleanPhone}`,
+      contact_name: senderName,
+      phone: isGroup ? remoteJid : cleanPhone,
+      company_name: isGroup ? 'Grupo WhatsApp' : 'WhatsApp',
+      deal_title: isGroup ? 'Chat Grupal' : 'Conversación directa',
+      deal_value: 0,
+      deal_id: `wa-${cleanPhone}`,
+      unread_count: fromMe ? 0 : 1,
+      last_message: text,
+      last_time: new Date(timestamp).toLocaleTimeString('es-GT', { hour: '2-digit', minute: '2-digit' }),
+      assigned_rep: 'WhatsApp',
+      response_delay_minutes: 0,
+      messages: [],
+      has_real_messages: true,
+      timestamp: timestamp
+    };
+    chatsMap.set(cleanPhone, chat);
+  }
+
+  if (senderName && !senderName.startsWith('+')) {
+    chat.contact_name = senderName;
+  }
+
+  // Avoid duplicates
+  if (!chat.messages.some(existing => existing.id === msgObj.id)) {
+    chat.messages.push(msgObj);
+    chat.last_message = text;
+    chat.last_time = new Date(timestamp).toLocaleTimeString('es-GT', { hour: '2-digit', minute: '2-digit' });
+    chat.timestamp = timestamp;
+    if (!fromMe) {
+      chat.unread_count = (chat.unread_count || 0) + 1;
+    }
+  }
+
+  return { chat, message: msgObj };
+}
+
+function registerChat(c) {
+  if (!c || !c.id || c.id === 'status@broadcast') return;
+  const remoteJid = c.id;
+  const isGroup = remoteJid.includes('@g.us');
+  const cleanKey = remoteJid.replace('@s.whatsapp.net', '').replace('@lid', '').replace('@g.us', '');
+
+  const name = c.name || contactsMap.get(remoteJid) || contactsMap.get(cleanKey) || (isGroup ? 'Grupo WhatsApp' : `+${cleanKey}`);
+
+  let chat = chatsMap.get(cleanKey) || chatsMap.get(remoteJid);
+  if (!chat) {
+    chat = {
+      id: `chat-wa-${cleanKey}`,
+      contact_name: name,
+      phone: remoteJid,
+      company_name: isGroup ? 'Grupo WhatsApp' : 'WhatsApp',
+      deal_title: isGroup ? 'Chat Grupal' : 'Conversación de WhatsApp',
+      deal_value: 0,
+      deal_id: `wa-${cleanKey}`,
+      unread_count: c.unreadCount || 0,
+      last_message: 'Conversación de WhatsApp',
+      last_time: c.conversationTimestamp ? new Date(Number(c.conversationTimestamp) * 1000).toLocaleTimeString('es-GT', { hour: '2-digit', minute: '2-digit' }) : 'Reciente',
+      assigned_rep: 'WhatsApp',
+      response_delay_minutes: 0,
+      messages: [],
+      has_real_messages: true,
+      timestamp: c.conversationTimestamp ? new Date(Number(c.conversationTimestamp) * 1000).toISOString() : new Date().toISOString()
+    };
+    chatsMap.set(cleanKey, chat);
+  } else if (name && !name.startsWith('+')) {
+    chat.contact_name = name;
+  }
+}
 
 async function startBaileys() {
   try {
@@ -36,13 +162,75 @@ async function startBaileys() {
 
     sock = makeWASocket({
       auth: state,
-      printQRInTerminal: true, // Also prints in terminal for easy terminal scanning
+      printQRInTerminal: true,
       logger: pino({ level: 'silent' }),
       browser: Browsers.macOS('Desktop'),
-      syncFullHistory: false
+      syncFullHistory: true
     });
 
     sock.ev.on('creds.update', saveCreds);
+
+    // Initial History & Contacts Sync from Phone
+    sock.ev.on('contacts.set', ({ contacts }) => {
+      if (Array.isArray(contacts)) {
+        contacts.forEach(c => {
+          const id = c.id || '';
+          const name = c.name || c.notify || c.verifiedName;
+          if (name) {
+            contactsMap.set(id, name);
+            const clean = id.replace('@s.whatsapp.net', '').replace('@lid', '').replace('@g.us', '');
+            contactsMap.set(clean, name);
+          }
+        });
+      }
+    });
+
+    sock.ev.on('contacts.upsert', (contacts) => {
+      if (Array.isArray(contacts)) {
+        contacts.forEach(c => {
+          const id = c.id || '';
+          const name = c.name || c.notify || c.verifiedName;
+          if (name) {
+            contactsMap.set(id, name);
+            const clean = id.replace('@s.whatsapp.net', '').replace('@lid', '').replace('@g.us', '');
+            contactsMap.set(clean, name);
+          }
+        });
+      }
+    });
+
+    sock.ev.on('chats.set', ({ chats }) => {
+      console.log(`📥 [WhatsApp Baileys] chats.set: ${chats?.length || 0} chats`);
+      if (Array.isArray(chats)) chats.forEach(c => registerChat(c));
+    });
+
+    sock.ev.on('chats.upsert', (chats) => {
+      if (Array.isArray(chats)) chats.forEach(c => registerChat(c));
+    });
+
+    sock.ev.on('messaging-history.set', ({ chats, contacts, messages }) => {
+      console.log(`📥 [WhatsApp Baileys] Sincronizando historial completo: ${chats?.length || 0} chats, ${contacts?.length || 0} contactos, ${messages?.length || 0} mensajes recibidos del teléfono.`);
+
+      if (Array.isArray(contacts)) {
+        contacts.forEach(c => {
+          const id = c.id || '';
+          const name = c.name || c.notify || c.verifiedName;
+          if (name) {
+            contactsMap.set(id, name);
+            const clean = id.replace('@s.whatsapp.net', '').replace('@lid', '').replace('@g.us', '');
+            contactsMap.set(clean, name);
+          }
+        });
+      }
+
+      if (Array.isArray(chats)) {
+        chats.forEach(c => registerChat(c));
+      }
+
+      if (Array.isArray(messages)) {
+        messages.forEach(m => processMessage(m));
+      }
+    });
 
     sock.ev.on('connection.update', async (update) => {
       const { connection, lastDisconnect, qr } = update;
@@ -72,15 +260,13 @@ async function startBaileys() {
         connectionState.lastUpdated = new Date().toISOString();
         connectionState.lastError = lastDisconnect?.error?.message || 'Conexión cerrada';
 
-        console.log(`⚠️ [WhatsApp Baileys] Conexión cerrada (Código ${statusCode}). Reintentando reconectar: ${shouldReconnect}`);
+        console.log(`⚠️ [WhatsApp Baileys] Conexión cerrada (Código ${statusCode}). Reintentando: ${shouldReconnect}`);
 
         if (statusCode === DisconnectReason.loggedOut) {
           console.log('🔒 [WhatsApp Baileys] Sesión cerrada desde el celular. Limpiando credenciales...');
           try {
             fs.rmSync(AUTH_FOLDER, { recursive: true, force: true });
-          } catch (err) {
-            console.error('Error limpiando auth folder:', err);
-          }
+          } catch (err) {}
           setTimeout(() => startBaileys(), 3000);
         } else if (shouldReconnect) {
           setTimeout(() => startBaileys(), 3000);
@@ -107,69 +293,14 @@ async function startBaileys() {
       }
     });
 
-    // Handle Incoming Messages
+    // Real-Time Incoming & Outgoing Messages
     sock.ev.on('messages.upsert', async ({ messages, type }) => {
-      if (type !== 'notify' || !messages || messages.length === 0) return;
+      if (!messages || messages.length === 0) return;
 
       for (const m of messages) {
-        if (!m.message || m.key.fromMe) continue; // Skip messages sent by the user itself
-
-        const remoteJid = m.key.remoteJid;
-        if (!remoteJid || remoteJid.includes('@g.us') || remoteJid === 'status@broadcast') {
-          continue; // Skip group chats and status broadcasts for CRM inbox simplicity
-        }
-
-        const cleanPhone = remoteJid.replace('@s.whatsapp.net', '');
-        const text =
-          m.message.conversation ||
-          m.message.extendedTextMessage?.text ||
-          m.message.imageMessage?.caption ||
-          m.message.documentMessage?.caption ||
-          (m.message.audioMessage ? '[Nota de Voz]' : '[Archivo Multimedia]');
-
-        const senderName = m.pushName || `+${cleanPhone}`;
-        const timestamp = new Date(Number(m.messageTimestamp) * 1000).toISOString();
-
-        const messageData = {
-          id: m.key.id || `wa-${Date.now()}`,
-          from_phone: cleanPhone,
-          to_phone: connectionState.user?.phone || 'CRM',
-          contact_name: senderName,
-          text: text,
-          timestamp: timestamp,
-          direction: 'inbound',
-          status: 'received'
-        };
-
-        console.log(`📩 [WhatsApp Baileys Recibido] De ${senderName} (+${cleanPhone}): "${text}"`);
-        recentMessages.unshift(messageData);
-        if (recentMessages.length > 200) recentMessages.pop();
-
-        // Forward to Next.js API if server is up
-        try {
-          const webhookUrl = 'http://localhost:3000/api/webhooks/whatsapp';
-          await fetch(webhookUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              entry: [{
-                changes: [{
-                  value: {
-                    contacts: [{ profile: { name: senderName } }],
-                    messages: [{
-                      from: cleanPhone,
-                      text: { body: text },
-                      timestamp: Math.floor(new Date(timestamp).getTime() / 1000),
-                      type: 'text'
-                    }],
-                    metadata: { display_phone_number: connectionState.user?.phone || 'CRM' }
-                  }
-                }]
-              }]
-            })
-          }).catch(() => {});
-        } catch (e) {
-          // Ignore if Next.js webhook is offline
+        const res = processMessage(m);
+        if (res && !m.key.fromMe) {
+          console.log(`📩 [WhatsApp Mensaje] De ${res.chat.contact_name} (+${res.chat.phone}): "${res.message.text}"`);
         }
       }
     });
@@ -182,7 +313,7 @@ async function startBaileys() {
   }
 }
 
-// HTTP API Server for the Next.js CRM integration
+// HTTP API Server
 const server = http.createServer(async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -203,14 +334,39 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // 2. GET /api/messages: List recent received messages
-  if (url.pathname === '/api/messages' && req.method === 'GET') {
+  // 2. GET /api/chats: Retrieve real synced WhatsApp chats
+  if (url.pathname === '/api/chats' && req.method === 'GET') {
+    const chatsList = Array.from(chatsMap.values()).sort(
+      (a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime()
+    );
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ messages: recentMessages }));
+    res.end(JSON.stringify({ chats: chatsList }));
     return;
   }
 
-  // 3. POST /api/send: Send a WhatsApp message through the active Baileys socket
+  // 3. GET /api/messages: List all recent messages
+  if (url.pathname === '/api/messages' && req.method === 'GET') {
+    const allMsgs = [];
+    chatsMap.forEach(chat => {
+      chat.messages.forEach(m => {
+        allMsgs.push({
+          id: m.id,
+          from_phone: m.sender === 'contact' ? chat.phone : (connectionState.user?.phone || 'CRM'),
+          to_phone: m.sender === 'agent' ? chat.phone : (connectionState.user?.phone || 'CRM'),
+          contact_name: chat.contact_name,
+          text: m.text,
+          timestamp: m.timestamp,
+          direction: m.sender === 'agent' ? 'outbound' : 'inbound',
+          status: m.status
+        });
+      });
+    });
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ messages: allMsgs.slice(-200) }));
+    return;
+  }
+
+  // 4. POST /api/send: Send a real WhatsApp message
   if (url.pathname === '/api/send' && req.method === 'POST') {
     let bodyStr = '';
     req.on('data', chunk => { bodyStr += chunk; });
@@ -233,18 +389,76 @@ const server = http.createServer(async (req, res) => {
           return;
         }
 
-        const cleanPhone = String(to).replace(/[^\d]/g, '');
-        const jid = `${cleanPhone}@s.whatsapp.net`;
+        let jid = String(to).trim();
+        if (jid.includes('@lid') || jid.includes('@g.us') || jid.includes('@s.whatsapp.net')) {
+          // Valid full JID or LID
+        } else if (jid.length > 14 && !jid.startsWith('52') && !jid.startsWith('50') && !jid.startsWith('1')) {
+          jid = `${jid}@lid`;
+        } else {
+          const cleanPhone = jid.replace(/[^\d]/g, '');
+          jid = `${cleanPhone}@s.whatsapp.net`;
 
-        console.log(`🚀 [WhatsApp Baileys Enviando] A +${cleanPhone}: "${message}"`);
+          // Resolve exact verified WhatsApp JID (critical for Mexico +52 / international)
+          try {
+            const results = await sock.onWhatsApp(cleanPhone);
+            if (results && results.length > 0 && results[0].exists && results[0].jid) {
+              jid = results[0].jid;
+              console.log(`🔎 [WhatsApp JID Resuelto]: ${cleanPhone} -> ${jid}`);
+            } else if (results && results.length > 0 && results[0].jid) {
+              jid = results[0].jid;
+            }
+          } catch (e) {
+            console.warn('onWhatsApp lookup warning:', e.message);
+          }
+        }
+
+        console.log(`🚀 [WhatsApp Baileys Enviando] A ${jid}: "${message}"`);
         const sent = await sock.sendMessage(jid, { text: message });
+
+        const cleanPhone = jid.replace('@s.whatsapp.net', '').replace('@g.us', '');
+        const now = new Date().toISOString();
+        const sentMsg = {
+          id: sent?.key?.id || `msg-${Date.now()}`,
+          sender: 'agent',
+          text: message,
+          timestamp: now,
+          status: 'sent',
+          isReal: true
+        };
+
+        let chat = chatsMap.get(cleanPhone);
+        if (!chat) {
+          chat = {
+            id: `chat-wa-${cleanPhone}`,
+            contact_name: contactsMap.get(cleanPhone) || `+${cleanPhone}`,
+            phone: cleanPhone,
+            company_name: 'WhatsApp',
+            deal_title: 'Conversación directa',
+            deal_value: 0,
+            deal_id: `wa-${cleanPhone}`,
+            unread_count: 0,
+            last_message: message,
+            last_time: new Date().toLocaleTimeString('es-GT', { hour: '2-digit', minute: '2-digit' }),
+            assigned_rep: 'Tú (CRM)',
+            response_delay_minutes: 0,
+            messages: [],
+            has_real_messages: true,
+            timestamp: now
+          };
+          chatsMap.set(cleanPhone, chat);
+        }
+        chat.messages.push(sentMsg);
+        chat.last_message = message;
+        chat.last_time = new Date().toLocaleTimeString('es-GT', { hour: '2-digit', minute: '2-digit' });
+        chat.timestamp = now;
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
           success: true,
           message_id: sent?.key?.id || `msg-${Date.now()}`,
           to: cleanPhone,
-          timestamp: new Date().toISOString()
+          jid: jid,
+          timestamp: now
         }));
       } catch (err) {
         console.error('Error enviando mensaje vía Baileys:', err);
@@ -255,7 +469,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // 4. POST /api/disconnect: Log out and reset session
+  // 5. POST /api/disconnect: Log out and reset session
   if (url.pathname === '/api/disconnect' && req.method === 'POST') {
     try {
       if (sock) {
@@ -269,6 +483,7 @@ const server = http.createServer(async (req, res) => {
       connectionState.state = 'scan_qr';
       connectionState.user = null;
       connectionState.qr = null;
+      chatsMap.clear();
 
       setTimeout(() => startBaileys(), 1500);
 

@@ -36,9 +36,20 @@ interface WhatsAppThread {
 }
 
 function getInitials(name: string) {
-  return name.split(" ").map((n) => n[0]).join("").substring(0, 2).toUpperCase();
+  if (!name) return "WA";
+  const clean = name.replace(/[^\p{L}\p{N}\s]/gu, "").trim();
+  if (!clean) return name.substring(0, 2) || "WA";
+  return clean.split(" ").map((n) => n[0]).join("").substring(0, 2).toUpperCase();
 }
-function formatPhone(phone?: string): string { return phone || "Sin teléfono"; }
+function formatPhone(phone?: string): string {
+  if (!phone) return "Sin teléfono";
+  if (phone.includes("@lid") || (phone.length > 14 && !phone.startsWith("52") && !phone.startsWith("50"))) {
+    return "Usuario WhatsApp";
+  }
+  const clean = phone.replace(/[^\d]/g, "");
+  if (clean.length >= 10) return `+${clean}`;
+  return phone;
+}
 function ls(key: string, fallback = "") {
   if (typeof window === "undefined") return fallback;
   return localStorage.getItem(key) || fallback;
@@ -73,6 +84,47 @@ export default function WhatsAppInboxPage() {
   const [isAuditing, setIsAuditing] = useState(false);
   const [auditResult, setAuditResult] = useState<{score:number;rating:string;summary:string;strengths:string[];improvements:string[]} | null>(null);
 
+  // New Chat Modal state
+  const [isNewChatModalOpen, setIsNewChatModalOpen] = useState(false);
+  const [newChatPhone, setNewChatPhone] = useState("");
+  const [newChatName, setNewChatName] = useState("");
+
+  const handleStartNewChat = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newChatPhone.trim()) return;
+    const cleanPhone = newChatPhone.replace(/[^\d]/g, "");
+    const contactName = newChatName.trim() || `+${cleanPhone}`;
+    const threadId = `chat-direct-${cleanPhone}`;
+
+    const newThread: WhatsAppThread = {
+      id: threadId,
+      contact_name: contactName,
+      phone: cleanPhone,
+      company_name: "WhatsApp Directo",
+      deal_title: "Conversación iniciada",
+      deal_value: 0,
+      deal_id: "",
+      unread_count: 0,
+      last_message: "Chat creado",
+      last_time: new Date().toLocaleTimeString("es-GT", { hour: "2-digit", minute: "2-digit" }),
+      assigned_rep: "Tú (WhatsApp)",
+      response_delay_minutes: 0,
+      messages: [],
+      has_real_messages: true,
+    };
+
+    setThreads((prev) => {
+      const exists = prev.find((t) => t.phone.replace(/[^\d]/g, "") === cleanPhone);
+      if (exists) return prev;
+      return [newThread, ...prev];
+    });
+
+    setActiveThreadId(threadId);
+    setIsNewChatModalOpen(false);
+    setNewChatPhone("");
+    setNewChatName("");
+  };
+
   useEffect(() => {
     if (typeof window !== "undefined") {
       setIsWhatsAppConnected(ls(WA_KEYS.IS_CONNECTED) === "true");
@@ -80,41 +132,97 @@ export default function WhatsAppInboxPage() {
     }
   }, []);
 
+  // Initialize real threads from persistent localStorage or mock only if disconnected
   useEffect(() => {
-    if (!data.deals || data.deals.length === 0) return;
-    let savedMessages: Record<string, ChatMessage[]> = {};
     try {
-      const raw = typeof window !== "undefined" ? localStorage.getItem("WA_THREAD_MESSAGES") : null;
-      if (raw) savedMessages = JSON.parse(raw);
+      const rawReal = typeof window !== "undefined" ? localStorage.getItem("WA_REAL_SAVED_THREADS") : null;
+      if (rawReal) {
+        const parsed: WhatsAppThread[] = JSON.parse(rawReal);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setThreads(parsed);
+          if (!activeThreadId) setActiveThreadId(parsed[0].id);
+          return;
+        }
+      }
     } catch {}
+
+    const isConn = ls(WA_KEYS.IS_CONNECTED) === "true";
+    if (isConn) {
+      setThreads([]);
+      return;
+    }
+
+    if (!data.deals || data.deals.length === 0) return;
     const built: WhatsAppThread[] = data.deals.map((deal, idx) => {
       const contact = data.contacts.find((c) => c.id === deal.contact_id);
       const phone = contact?.phone || (deal.custom_fields?.["phone"] as string) || (deal.custom_fields?.["telefono"] as string) || "";
       const repName = (deal.custom_fields?.["assigned_rep"] as string) || (deal.custom_fields?.["vendedor"] as string) || data.settings?.company_name || "Equipo de Ventas";
       const threadId = `chat-${deal.id}`;
-      const persisted = savedMessages[threadId];
-      const initialMessages: ChatMessage[] = persisted || [{ id: `m-${deal.id}-init`, sender: "contact", text: `Hola, me interesa ${deal.title}.`, timestamp: new Date(deal.created_at).toLocaleTimeString("es-GT", { hour: "2-digit", minute: "2-digit" }) }];
+      const initialMessages: ChatMessage[] = [{ id: `m-${deal.id}-init`, sender: "contact", text: `Hola, me interesa ${deal.title}.`, timestamp: new Date(deal.created_at).toLocaleTimeString("es-GT", { hour: "2-digit", minute: "2-digit" }) }];
       const lastMsg = initialMessages[initialMessages.length - 1];
-      return { id: threadId, contact_name: deal.contact_name || contact?.name || "Cliente Potencial", phone: formatPhone(phone), company_name: deal.company_name || "Empresa", deal_title: deal.title, deal_value: deal.value, deal_id: deal.id, unread_count: idx === 0 && !persisted ? 1 : 0, last_message: lastMsg?.text || `Consulta sobre ${deal.title}`, last_time: lastMsg?.timestamp || "Reciente", assigned_rep: repName, response_delay_minutes: 0, messages: initialMessages, has_real_messages: false };
+      return { id: threadId, contact_name: deal.contact_name || contact?.name || "Cliente Potencial", phone: formatPhone(phone), company_name: deal.company_name || "Empresa", deal_title: deal.title, deal_value: deal.value, deal_id: deal.id, unread_count: idx === 0 ? 1 : 0, last_message: lastMsg?.text || `Consulta sobre ${deal.title}`, last_time: lastMsg?.timestamp || "Reciente", assigned_rep: repName, response_delay_minutes: 0, messages: initialMessages, has_real_messages: false };
     });
     setThreads(built);
     if (built.length > 0 && !activeThreadId) setActiveThreadId(built[0].id);
   }, [data.deals, data.contacts, data.settings]);
 
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [threads, activeThreadId]);
+
+  // Persist real threads automatically whenever they change
   useEffect(() => {
     if (threads.length === 0) return;
     try {
-      const msgMap: Record<string, ChatMessage[]> = {};
-      threads.forEach((t) => { msgMap[t.id] = t.messages; });
-      if (typeof window !== "undefined") localStorage.setItem("WA_THREAD_MESSAGES", JSON.stringify(msgMap));
+      const realOnly = threads.filter((t) => t.has_real_messages || !t.id.startsWith("chat-deal"));
+      if (realOnly.length > 0 && typeof window !== "undefined") {
+        localStorage.setItem("WA_REAL_SAVED_THREADS", JSON.stringify(realOnly));
+      }
     } catch {}
   }, [threads]);
+
+  const fetchRealWhatsAppChats = useCallback(async () => {
+    try {
+      const res = await fetch("/api/whatsapp/baileys?type=chats");
+      if (!res.ok) return;
+      const resData = await res.json();
+      if (Array.isArray(resData.chats) && resData.chats.length > 0) {
+        setHasLiveMessages(true);
+        const realThreads: WhatsAppThread[] = resData.chats.map((realChat: any) => {
+          const cleanP = realChat.phone;
+          return {
+            id: realChat.id || `chat-wa-${cleanP}`,
+            contact_name: realChat.contact_name || `+${cleanP}`,
+            phone: realChat.phone,
+            company_name: realChat.company_name || "WhatsApp",
+            deal_title: realChat.deal_title || "Chat de WhatsApp",
+            deal_value: 0,
+            deal_id: realChat.deal_id || "",
+            unread_count: realChat.unread_count || 0,
+            last_message: realChat.last_message || "Conversación activa",
+            last_time: realChat.last_time || "Reciente",
+            assigned_rep: realChat.assigned_rep || "WhatsApp",
+            response_delay_minutes: 0,
+            messages: realChat.messages || [],
+            has_real_messages: true,
+          };
+        });
+
+        setThreads(realThreads);
+        if (typeof window !== "undefined") {
+          localStorage.setItem("WA_REAL_SAVED_THREADS", JSON.stringify(realThreads));
+        }
+        setActiveThreadId((curr) => {
+          if (curr && realThreads.some((t) => t.id === curr)) return curr;
+          return realThreads[0]?.id || "";
+        });
+      }
+    } catch {}
+  }, []);
 
   const pollForNewMessages = useCallback(async () => {
     if (isPolling) return;
     setIsPolling(true);
     try {
+      await fetchRealWhatsAppChats();
       const res = await fetch(`/api/whatsapp/messages?since=${encodeURIComponent(lastPolledAt)}`);
       if (!res.ok) return;
       const resData: { messages: any[] } = await res.json();
@@ -123,7 +231,8 @@ export default function WhatsAppInboxPage() {
       setHasLiveMessages(true);
       setLastPolledAt(new Date().toISOString());
       setThreads((prev) => {
-        const updated = [...prev];
+        const cleanPrev = prev.filter((t) => t.has_real_messages || !t.id.startsWith("chat-deal"));
+        const updated = [...cleanPrev];
         incoming.forEach((inMsg) => {
           const phone = inMsg.from_phone;
           const threadIdx = updated.findIndex((t) => t.phone.replace(/[^\d]/g, "") === phone.replace(/[^\d]/g, ""));
@@ -132,19 +241,23 @@ export default function WhatsAppInboxPage() {
             const exists = updated[threadIdx].messages.some((m) => m.id === inMsg.id);
             if (!exists) { updated[threadIdx] = { ...updated[threadIdx], messages: [...updated[threadIdx].messages, newChatMsg], last_message: inMsg.text, last_time: newChatMsg.timestamp, unread_count: updated[threadIdx].unread_count + 1, has_real_messages: true }; }
           } else {
-            updated.unshift({ id: `chat-real-${phone}`, contact_name: inMsg.contact_name || `+${phone}`, phone, company_name: "Contacto Nuevo", deal_title: "Conversación entrante", deal_value: 0, deal_id: "", unread_count: 1, last_message: inMsg.text, last_time: newChatMsg.timestamp, assigned_rep: "CRM", response_delay_minutes: 0, messages: [newChatMsg], has_real_messages: true });
+            updated.unshift({ id: `chat-real-${phone}`, contact_name: inMsg.contact_name || `+${phone}`, phone, company_name: "Contacto WhatsApp", deal_title: "Conversación entrante", deal_value: 0, deal_id: "", unread_count: 1, last_message: inMsg.text, last_time: newChatMsg.timestamp, assigned_rep: "WhatsApp", response_delay_minutes: 0, messages: [newChatMsg], has_real_messages: true });
           }
         });
+        if (typeof window !== "undefined") {
+          localStorage.setItem("WA_REAL_SAVED_THREADS", JSON.stringify(updated));
+        }
         return updated;
       });
     } catch (err) { console.warn("[WhatsApp Polling] Error:", err); }
     finally { setIsPolling(false); }
-  }, [isPolling, lastPolledAt]);
+  }, [isPolling, lastPolledAt, fetchRealWhatsAppChats]);
 
   useEffect(() => {
-    pollingRef.current = setInterval(() => { pollForNewMessages(); }, 8000);
+    fetchRealWhatsAppChats();
+    pollingRef.current = setInterval(() => { pollForNewMessages(); }, 5000);
     return () => { if (pollingRef.current) clearInterval(pollingRef.current); };
-  }, [pollForNewMessages]);
+  }, [pollForNewMessages, fetchRealWhatsAppChats]);
 
   const activeThread = threads.find((t) => t.id === activeThreadId) || threads[0] || null;
 
@@ -294,28 +407,14 @@ export default function WhatsAppInboxPage() {
 
   const uniqueReps = Array.from(new Set(threads.map((t) => t.assigned_rep)));
   const filteredThreads = threads.filter((t) => {
-    const matchesSearch = t.contact_name.toLowerCase().includes(searchQuery.toLowerCase()) || t.company_name.toLowerCase().includes(searchQuery.toLowerCase()) || t.deal_title.toLowerCase().includes(searchQuery.toLowerCase());
+    // If WhatsApp is connected, remove any mock dummy deal that has no real messages
+    if (isWhatsAppConnected && (t.id.startsWith("chat-deal-") || t.id.startsWith("chat-d-") || !t.has_real_messages)) {
+      return false;
+    }
+    const matchesSearch = t.contact_name.toLowerCase().includes(searchQuery.toLowerCase()) || t.company_name.toLowerCase().includes(searchQuery.toLowerCase()) || t.deal_title.toLowerCase().includes(searchQuery.toLowerCase()) || t.phone.toLowerCase().includes(searchQuery.toLowerCase());
     const matchesRep = selectedRepFilter === "all" || t.assigned_rep === selectedRepFilter;
     return matchesSearch && matchesRep;
   });
-
-  if (threads.length === 0) {
-    return (
-      <div className="min-h-screen bg-slate-100 flex flex-col font-sans text-slate-900">
-        <Navbar />
-        <main className="flex-1 max-w-7xl w-full mx-auto p-6 flex flex-col items-center justify-center gap-6 text-center">
-          <div className="bg-white border border-slate-200 rounded-2xl p-10 shadow-sm max-w-md w-full space-y-4">
-            <MessageSquare className="w-12 h-12 text-indigo-300 mx-auto" />
-            <h2 className="text-lg font-extrabold text-slate-900">Bandeja de WhatsApp Vacía</h2>
-            <p className="text-sm text-slate-600 font-medium">No tienes negocios en tu pipeline. Crea tu primer negocio para ver conversaciones aquí.</p>
-            <a href="/pipeline" className="inline-flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs px-5 py-2.5 rounded-xl transition-colors">
-              <Plus className="w-4 h-4" /> Ir al Pipeline
-            </a>
-          </div>
-        </main>
-      </div>
-    );
-  }
 
   return (
     <div className="min-h-screen bg-slate-100 flex flex-col font-sans text-slate-900">
@@ -372,13 +471,22 @@ export default function WhatsAppInboxPage() {
             <div className="p-3 border-b border-slate-200 bg-white">
               <div className="flex items-center justify-between mb-2">
                 <h2 className="text-xs font-extrabold text-slate-900 flex items-center gap-1.5"><MessageSquare className="w-4 h-4 text-emerald-600" />Conversaciones ({filteredThreads.length})</h2>
-                <button onClick={pollForNewMessages} title="Actualizar mensajes" className="p-1 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer">
-                  <RefreshCw className={`w-3.5 h-3.5 ${isPolling ? "animate-spin" : ""}`} />
-                </button>
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => setIsNewChatModalOpen(true)}
+                    title="Nuevo Chat de WhatsApp"
+                    className="p-1 rounded-lg bg-emerald-50 text-emerald-700 hover:bg-emerald-100 transition-colors cursor-pointer text-[11px] font-bold flex items-center gap-1 px-2"
+                  >
+                    <Plus className="w-3.5 h-3.5" /> <span>Nuevo</span>
+                  </button>
+                  <button onClick={pollForNewMessages} title="Actualizar mensajes" className="p-1 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer">
+                    <RefreshCw className={`w-3.5 h-3.5 ${isPolling ? "animate-spin" : ""}`} />
+                  </button>
+                </div>
               </div>
               <div className="relative mb-2">
                 <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
-                <input type="text" placeholder="Buscar contacto, empresa..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="w-full bg-slate-100 border border-slate-200 rounded-xl pl-9 pr-3 py-1.5 text-xs text-slate-900 font-medium focus:ring-2 focus:ring-indigo-600 focus:outline-none" />
+                <input type="text" placeholder="Buscar contacto, teléfono..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="w-full bg-slate-100 border border-slate-200 rounded-xl pl-9 pr-3 py-1.5 text-xs text-slate-900 font-medium focus:ring-2 focus:ring-indigo-600 focus:outline-none" />
               </div>
               {uniqueReps.length > 1 && (
                 <div className="flex items-center gap-1.5 bg-slate-100 px-2.5 py-1.5 rounded-xl border border-slate-200 text-xs font-bold">
@@ -619,6 +727,81 @@ export default function WhatsAppInboxPage() {
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* New Direct WhatsApp Chat Modal */}
+      {isNewChatModalOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-sm w-full p-6 space-y-4 shadow-2xl border border-slate-200 text-slate-900 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold">
+                  <Phone className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-extrabold text-slate-900 text-sm">Nuevo Chat de WhatsApp</h3>
+                  <p className="text-[10px] text-slate-500 font-medium">Escribe a cualquier número directamente</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsNewChatModalOpen(false)}
+                className="w-7 h-7 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-500 flex items-center justify-center transition-colors cursor-pointer text-xs"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleStartNewChat} className="space-y-3">
+              <div>
+                <label className="text-xs font-bold text-slate-700 block mb-1">
+                  Número de Teléfono (con código de país) *
+                </label>
+                <input
+                  type="text"
+                  required
+                  autoFocus
+                  placeholder="ej: 5217221234567 o 50255443322"
+                  value={newChatPhone}
+                  onChange={(e) => setNewChatPhone(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-xs font-mono font-medium text-slate-900 focus:ring-2 focus:ring-emerald-600 focus:outline-none"
+                />
+                <span className="text-[10px] text-slate-400 mt-0.5 block">
+                  Solo dígitos sin espacios ni guiones (ej: 521...).
+                </span>
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-slate-700 block mb-1">
+                  Nombre del Contacto (Opcional)
+                </label>
+                <input
+                  type="text"
+                  placeholder="ej: Juan Pérez"
+                  value={newChatName}
+                  onChange={(e) => setNewChatName(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-xs font-medium text-slate-900 focus:ring-2 focus:ring-emerald-600 focus:outline-none"
+                />
+              </div>
+
+              <div className="pt-2 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsNewChatModalOpen(false)}
+                  className="px-4 py-2 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-100 transition-colors"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={!newChatPhone.trim()}
+                  className="bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 text-white font-bold text-xs px-5 py-2 rounded-xl transition-colors shadow-xs"
+                >
+                  Abrir Conversación
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

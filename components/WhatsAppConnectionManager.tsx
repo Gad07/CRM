@@ -306,40 +306,52 @@ export function WhatsAppConnectionManager() {
         {[
           {
             key: "baileys",
-            icon: <QrCode className="w-4 h-4 text-emerald-600" />,
+            icon: <QrCode className="w-4 h-4 text-emerald-600 shrink-0" />,
             title: "WhatsApp Web (Código QR)",
             desc: "Escanea el código con tu celular (Personal o Business). 100% gratis y sin verificación en Meta.",
           },
           {
             key: "meta",
-            icon: <Zap className="w-4 h-4 text-indigo-600" />,
+            icon: <Zap className="w-4 h-4 text-indigo-600 shrink-0" />,
             title: "Meta Cloud API (Oficial)",
             desc: "1,000 conversaciones gratis al mes. Requiere cuenta comercial verificada en Meta Business.",
           },
           {
             key: "twilio",
-            icon: <Phone className="w-4 h-4 text-blue-600" />,
+            icon: <Phone className="w-4 h-4 text-blue-600 shrink-0" />,
             title: "Twilio for WhatsApp",
             desc: "Integración para empresas que ya cuentan con números corporativos en Twilio.",
           },
-        ].map(({ key, icon, title, desc }) => (
-          <div
-            key={key}
-            onClick={() => {
-              setProvider(key as any);
-              lsSet(WA_KEYS.PROVIDER, key);
-            }}
-            className={`${cardBase} ${provider === key ? cardActive : cardIdle}`}
-          >
-            <div className="flex items-center justify-between mb-1 pointer-events-none">
-              <h4 className="text-xs font-extrabold text-slate-900 flex items-center gap-1.5">
-                {icon} {title}
-              </h4>
-              {provider === key && <Check className="w-4 h-4 text-emerald-600" />}
-            </div>
-            <p className="text-[11px] text-slate-600 font-medium pointer-events-none">{desc}</p>
-          </div>
-        ))}
+        ].map(({ key, icon, title, desc }) => {
+          const isActive = provider === key;
+          return (
+            <button
+              type="button"
+              key={key}
+              onClick={() => {
+                setProvider(key as any);
+                lsSet(WA_KEYS.PROVIDER, key);
+              }}
+              className={`p-4 rounded-2xl border text-left transition-all cursor-pointer relative z-20 w-full focus:outline-none focus:ring-2 focus:ring-emerald-500 shadow-2xs ${
+                isActive
+                  ? "bg-emerald-50/90 border-emerald-500 ring-2 ring-emerald-500/40 shadow-xs"
+                  : "bg-slate-50/80 hover:bg-slate-100/90 border-slate-200"
+              }`}
+            >
+              <div className="flex items-center justify-between mb-1.5">
+                <h4 className={`text-xs font-extrabold flex items-center gap-1.5 ${isActive ? "text-emerald-950" : "text-slate-900"}`}>
+                  {icon} {title}
+                </h4>
+                {isActive && (
+                  <span className="w-5 h-5 rounded-full bg-emerald-600 text-white flex items-center justify-center">
+                    <Check className="w-3 h-3 stroke-[3]" />
+                  </span>
+                )}
+              </div>
+              <p className={`text-[11px] font-medium leading-relaxed ${isActive ? "text-emerald-800/90" : "text-slate-500"}`}>{desc}</p>
+            </button>
+          );
+        })}
       </div>
 
       {/* ── MODE 0: BAILEYS QR SCANNER ── */}

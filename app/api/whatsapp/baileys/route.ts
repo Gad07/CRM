@@ -1,29 +1,77 @@
 import { NextRequest, NextResponse } from "next/server";
 
-const BAILEYS_URL = process.env.BAILEYS_SERVER_URL || process.env.NEXT_PUBLIC_BAILEYS_SERVER_URL || "http://127.0.0.1:3001";
+const PRIMARY_URL =
+  process.env.BAILEYS_SERVER_URL ||
+  process.env.NEXT_PUBLIC_BAILEYS_SERVER_URL ||
+  "https://crm-whatsapp-server.onrender.com";
 
-export async function GET() {
+const CANDIDATE_URLS = [
+  PRIMARY_URL.replace(/\/+$/, ""),
+  "https://crm-whatsapp-server.onrender.com",
+  "http://127.0.0.1:3001",
+  "http://localhost:3001",
+];
+
+async function tryBaileysRequest(path: string, options?: RequestInit) {
+  const tried = new Set<string>();
+
+  for (const base of CANDIDATE_URLS) {
+    if (tried.has(base)) continue;
+    tried.add(base);
+
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 6000);
+
+      const res = await fetch(`${base}${path}`, {
+        cache: "no-store",
+        headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
+        ...options,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (res.ok) {
+        const data = await res.json();
+        return { ok: true, data, status: res.status };
+      }
+    } catch {
+      // Continue to next candidate
+    }
+  }
+
+  return { ok: false, data: null, status: 503 };
+}
+
+export async function GET(req: NextRequest) {
   try {
-    const res = await fetch(`${BAILEYS_URL}/api/status`, {
-      cache: "no-store",
-      headers: { "Content-Type": "application/json" }
-    });
+    const { searchParams } = new URL(req.url);
+    const type = searchParams.get("type");
 
-    if (!res.ok) {
-      return NextResponse.json({
-        connected: false,
-        state: "server_offline",
-        message: "El servidor de Baileys no está corriendo en el puerto 3001."
-      }, { status: 200 });
+    if (type === "chats") {
+      const result = await tryBaileysRequest("/api/chats");
+      if (result.ok && result.data) {
+        return NextResponse.json(result.data);
+      }
+      return NextResponse.json({ chats: [] });
     }
 
-    const data = await res.json();
-    return NextResponse.json(data);
-  } catch {
+    const result = await tryBaileysRequest("/api/status");
+    if (result.ok && result.data) {
+      return NextResponse.json(result.data);
+    }
+
     return NextResponse.json({
       connected: false,
       state: "server_offline",
-      message: "Servidor local de WhatsApp no detectado. Inicia 'npm run whatsapp:server'."
+      message: "Servidor de WhatsApp no detectado en Render ni local.",
+    }, { status: 200 });
+  } catch (err: any) {
+    return NextResponse.json({
+      connected: false,
+      state: "server_offline",
+      message: err.message || "Error conectando al motor de WhatsApp.",
     }, { status: 200 });
   }
 }
@@ -34,29 +82,31 @@ export async function POST(req: NextRequest) {
     const { action, to, message } = body;
 
     if (action === "disconnect") {
-      const res = await fetch(`${BAILEYS_URL}/api/disconnect`, {
+      const result = await tryBaileysRequest("/api/disconnect", {
         method: "POST",
-        headers: { "Content-Type": "application/json" }
       });
-      const data = await res.json();
-      return NextResponse.json(data);
+      if (result.ok) return NextResponse.json(result.data);
+      return NextResponse.json({ success: true });
     }
 
     if (action === "send" || (!action && to && message)) {
-      const res = await fetch(`${BAILEYS_URL}/api/send`, {
+      const result = await tryBaileysRequest("/api/send", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ to, message })
+        body: JSON.stringify({ to, message }),
       });
-      const data = await res.json();
-      return NextResponse.json(data, { status: res.status });
+      if (result.ok && result.data) {
+        return NextResponse.json(result.data);
+      }
+      return NextResponse.json({
+        error: "No se pudo enviar el mensaje a través del servidor de WhatsApp.",
+      }, { status: 502 });
     }
 
     return NextResponse.json({ error: "Acción no reconocida" }, { status: 400 });
   } catch (err: any) {
     return NextResponse.json({
       error: err.message || "Error conectando con el motor de WhatsApp",
-      connected: false
+      connected: false,
     }, { status: 500 });
   }
 }
