@@ -6,7 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "whatsapp:server": "node scripts/whatsapp-server.js"
+    "whatsapp:server": "node --max-old-space-size=350 scripts/whatsapp-server.js"
   },
   "dependencies": {
     "@hapi/boom": "^10.0.1",

@@ -276,9 +276,12 @@ async function processMessage(m) {
     }
   }
 
-  // Avoid duplicates
+  // Avoid duplicates & cap message history to prevent RAM exhaustion on Render (512MB limit)
   if (!chat.messages.some(existing => existing.id === msgObj.id)) {
     chat.messages.push(msgObj);
+    if (chat.messages.length > 40) {
+      chat.messages = chat.messages.slice(-40);
+    }
     chat.last_message = text;
     chat.last_time = new Date(timestamp).toLocaleTimeString('es-GT', { hour: '2-digit', minute: '2-digit' });
     chat.timestamp = timestamp;
@@ -781,6 +784,27 @@ const server = http.createServer(async (req, res) => {
   res.writeHead(404, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({ error: 'Ruta no encontrada' }));
 });
+
+// Periodic Memory Management Routine (Keeps RAM < 250MB on Render 512MB free tier)
+setInterval(() => {
+  try {
+    const memory = process.memoryUsage();
+    const heapMb = Math.round(memory.heapUsed / 1024 / 1024);
+    const rssMb = Math.round(memory.rss / 1024 / 1024);
+
+    if (rssMb > 250 || heapMb > 200) {
+      console.log(`🧹 [CRM Memory Cleanup] Memoria RSS: ${rssMb}MB, Heap: ${heapMb}MB. Liberando espacio...`);
+      chatsMap.forEach((chat) => {
+        if (chat.messages && chat.messages.length > 25) {
+          chat.messages = chat.messages.slice(-25);
+        }
+      });
+      if (global.gc) {
+        global.gc();
+      }
+    }
+  } catch (e) {}
+}, 3 * 60 * 1000);
 
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`====================================================`);
