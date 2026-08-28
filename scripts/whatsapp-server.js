@@ -156,6 +156,20 @@ async function startBaileys() {
   isStarting = true;
 
   try {
+    if (sock) {
+      try {
+        sock.ev.removeAllListeners('connection.update');
+        sock.ev.removeAllListeners('creds.update');
+        sock.ev.removeAllListeners('messages.upsert');
+        sock.ev.removeAllListeners('chats.set');
+        sock.ev.removeAllListeners('chats.upsert');
+        sock.ev.removeAllListeners('contacts.set');
+        sock.ev.removeAllListeners('contacts.upsert');
+        sock.ev.removeAllListeners('messaging-history.set');
+        sock.end();
+      } catch (err) {}
+    }
+
     if (!fs.existsSync(AUTH_FOLDER)) {
       fs.mkdirSync(AUTH_FOLDER, { recursive: true });
     }
@@ -172,6 +186,8 @@ async function startBaileys() {
       browser: Browsers.macOS('Desktop'),
       syncFullHistory: true
     });
+
+    isStarting = false;
 
     sock.ev.on('creds.update', saveCreds);
 
